@@ -8,6 +8,7 @@ blob-report/
 playwright/.cache/
 playwright/.auth/
 .playwright-browsers/
+.playwright-cli/
 output/playwright/
 
 *.log

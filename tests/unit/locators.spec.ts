@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { getKeyboardKey, KEYBOARD_KEYS, LOCATORS } from '../../src/automation/locators';
+import {
+  getKeyboardKey,
+  getSuccessToast,
+  KEYBOARD_KEYS,
+  LEGACY_SUCCESS_TOAST_TEXT,
+  LOCATORS,
+} from '../../src/automation/locators';
 
 test.describe('jing-testid 定位器', () => {
   test('业务定位器全部使用约定的打点值', () => {
@@ -39,5 +45,15 @@ test.describe('jing-testid 定位器', () => {
     expect((getKeyboardKey(fakePage, 'x') as never as { testId: string }).testId).toBe('x');
     expect((getKeyboardKey(fakePage, 'del') as never as { testId: string }).testId).toBe('del');
     expect((getKeyboardKey(fakePage, 'keyboard_close') as never as { testId: string }).testId).toBe('keyboard_close');
+  });
+
+  test('成功状态优先支持测试 ID', async ({ page }) => {
+    await page.setContent('<div jing-testid="success">成功</div>');
+    await expect(getSuccessToast(page)).toBeVisible();
+  });
+
+  test('兼容真实页面误输出的成功 Toast 文本', async ({ page }) => {
+    await page.setContent(`<div class="van-toast__text">${LEGACY_SUCCESS_TOAST_TEXT}</div>`);
+    await expect(getSuccessToast(page)).toBeVisible();
   });
 });

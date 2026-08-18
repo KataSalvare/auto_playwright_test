@@ -38,10 +38,25 @@ export const KEYBOARD_KEYS = Object.freeze([
 
 export type LocatorTestId = (typeof LOCATORS)[keyof typeof LOCATORS] | KeyboardKey;
 
+/**
+ * 当前测试页把成功标记误作为 Vant Toast 文本输出，而不是 jing-testid 属性。
+ * 保留测试 ID 为首选，仅对这个已确认的页面缺陷提供精确兼容。
+ */
+export const LEGACY_SUCCESS_TOAST_TEXT = 'jing-testid=success';
+
 export function byTestId(page: Page, testId: LocatorTestId) {
   return page.getByTestId(testId);
 }
 
 export function getKeyboardKey(page: Page, key: KeyboardKey) {
   return page.getByTestId(key);
+}
+
+export function getSuccessToast(page: Page) {
+  const testIdToast = byTestId(page, LOCATORS.successToast);
+  const legacyTextToast = page
+    .locator('.van-toast__text')
+    .filter({ hasText: new RegExp(`^${LEGACY_SUCCESS_TOAST_TEXT}$`) });
+
+  return testIdToast.or(legacyTextToast);
 }

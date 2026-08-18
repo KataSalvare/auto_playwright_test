@@ -12,6 +12,9 @@ export const automationConfig = {
   // false：显示浏览器，便于观察页面；true：后台运行。
   headless: true,
 
+  // 使用本机 Chrome，避免重复下载浏览器；删除此项可改用 Playwright Chromium。
+  browserChannel: 'chrome',
+
   // false：失败视频移动到 output/playwright/videos/failed/，便于排查。
   deleteFailedVideo: false,
 

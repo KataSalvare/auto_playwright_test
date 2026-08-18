@@ -48,6 +48,7 @@ function parseArgs(argv: string[]) {
     waitAgreement: true,
     waitProduct: true,
     headless: automationConfig.headless,
+    browserChannel: automationConfig.browserChannel,
     deleteFailedVideo: automationConfig.deleteFailedVideo,
     outputDir: automationConfig.outputDir,
   };

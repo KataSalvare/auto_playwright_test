@@ -3,7 +3,8 @@ import { resolve } from 'node:path';
 import { chromium, devices, selectors } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
 import { fillIdentity, fillName, fillPhone } from './human-input';
-import { byTestId, LOCATORS } from './locators';
+import { hasValidIdentityChecksum } from './identity';
+import { byTestId, getSuccessToast, LOCATORS } from './locators';
 import type { LocatorTestId } from './locators';
 import { createMobileBrowseBehavior } from './mobile-browse';
 import { createSeededRandom, randomBetween } from './random';
@@ -135,6 +136,15 @@ async function runFirstOrder(
     missingChance: options.identityMissingChance,
   });
 
+  mark('首单：提交实名信息并进入保障选择');
+  await clickTestId(page, LOCATORS.mainButton, '提交姓名和身份证');
+  if (!hasValidIdentityChecksum(order.identityNumber)) {
+    await sleep(500);
+    throw new Error(
+      '测试链接中的身份证号未通过校验位规则，页面无法进入社保步骤；请提供校验通过的测试身份证',
+    );
+  }
+
   const browse = createMobileBrowseBehavior({ page, profile: options.profile, seed: options.seed });
   mark('首单：模拟浏览并选择社保、续保');
   await browse.scroll();
@@ -188,7 +198,7 @@ export async function runOrderFlow(
 
   const browser = await chromium.launch({
     headless: options.headless,
-    channel: process.env.PW_CHANNEL || undefined,
+    channel: process.env.PW_CHANNEL || options.browserChannel,
   });
   const context = await browser.newContext({
     ...devices['iPhone 13'],
@@ -213,8 +223,10 @@ export async function runOrderFlow(
     else await runRepeatOrder(page, options, random);
 
     mark('等待成功 Toast');
-    await waitForAnyVisible(byTestId(page, LOCATORS.successToast), 30_000, '成功 Toast');
+    await waitForAnyVisible(getSuccessToast(page), 30_000, '成功 Toast');
     success = true;
+    mark('检测到成功 Toast，等待录像完整记录');
+    await waitConfigured(random, 800, 1_200);
   } catch (error) {
     failure = error;
   } finally {

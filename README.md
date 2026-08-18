@@ -30,6 +30,7 @@ output/playwright/videos/<订单号>.mp4
 ```ts
 export const automationConfig = {
   headless: false,          // false：显示浏览器，方便调试
+  browserChannel: 'chrome', // 使用本机 Chrome；删除此项则使用 Playwright Chromium
   deleteFailedVideo: false, // false：保留失败视频
   outputDir: 'output/playwright/videos',
 };
@@ -99,6 +100,11 @@ page.getByTestId('phone_input')
 page.getByTestId('agreement_continue')
 page.getByTestId('success')
 ```
+
+当前测试页的成功 Toast 存在一个兼容问题：页面实际把
+`jing-testid=success` 输出成了 Toast 文本，没有生成对应属性。脚本仍优先使用
+`getByTestId('success')`，并仅对 `.van-toast__text` 中完全一致的标记文本提供回退，
+其他交互仍全部通过 `jing-testid` 完成。
 
 全部定位器集中在 `src/automation/locators.ts`，包括手机号、姓名、身份证、社保、续保、协议、产品、成功 Toast 和身份证数字键盘。
 

@@ -3,6 +3,7 @@ import type { Locator, Page } from '@playwright/test';
 export type PageOrder = 1 | 2;
 export type ProductChoice = 'basic' | 'upgrade';
 export type BrowseProfile = 'skimmer' | 'reader' | 'distracted';
+export type BrowserChannel = 'chrome' | 'msedge';
 export type WaitFn = (durationMs: number) => Promise<void>;
 
 export type KeyboardKey =
@@ -39,6 +40,7 @@ export interface AutomationOptions {
   waitAgreement: boolean;
   waitProduct: boolean;
   headless: boolean;
+  browserChannel?: BrowserChannel;
   deleteFailedVideo: boolean;
   outputDir: string;
   phoneErrorChance?: number;
@@ -49,6 +51,8 @@ export interface AutomationOptions {
 export interface AutomationConfig {
   /** 是否使用无头浏览器；调试时改为 false。 */
   headless: boolean;
+  /** 使用本机浏览器通道；留空时使用 Playwright 安装的 Chromium。 */
+  browserChannel?: BrowserChannel;
   /** 未出现 success Toast 时是否删除失败视频。 */
   deleteFailedVideo: boolean;
   /** 视频输出目录。 */
