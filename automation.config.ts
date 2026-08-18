@@ -13,7 +13,7 @@ export const automationConfig = {
   headless: true,
 
   // false：失败视频移动到 output/playwright/videos/failed/，便于排查。
-  deleteFailedVideo: true,
+  deleteFailedVideo: false,
 
   outputDir: resolve('output/playwright/videos'),
 } satisfies AutomationConfig;
