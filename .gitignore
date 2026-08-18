@@ -1,0 +1,13 @@
+node_modules/
+.npm-cache/
+.env
+
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+playwright/.auth/
+.playwright-browsers/
+output/playwright/
+
+*.log

@@ -1,0 +1,26 @@
+{
+  "name": "playwright-automation-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright automation test framework",
+  "scripts": {
+    "test": "playwright test",
+    "test:unit": "playwright test tests/unit",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report",
+    "test:install": "playwright install chromium",
+    "automation": "tsx scripts/order-flow.ts",
+    "automation:headed": "tsx scripts/order-flow.ts --headed",
+    "automation:help": "tsx scripts/order-flow.ts --help",
+    "automation:fixtures": "tsx scripts/run-fixtures.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
