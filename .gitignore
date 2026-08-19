@@ -11,5 +11,9 @@ playwright/.auth/
 .playwright-cli/
 output/playwright/
 output/videos/
+output/quick-test-runs/
+output/quick-test-videos/
+output/quick-test-server-*.json
+output/quick-test-server.json
 
 *.log

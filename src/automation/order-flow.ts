@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium, devices, selectors } from '@playwright/test';
-import type { Locator, Page } from '@playwright/test';
+import type { Browser, BrowserContext, Locator, Page } from '@playwright/test';
 import { fillIdentity, fillName, fillPhone } from './human-input';
 import { hasValidIdentityChecksum } from './identity';
 import { byTestId, getSuccessToast, LOCATORS } from './locators';
@@ -609,24 +609,9 @@ export async function runOrderFlow(
 
   selectors.setTestIdAttribute('jing-testid');
 
-  const browser = await chromium.launch({
-    headless: options.headless,
-    channel: process.env.PW_CHANNEL || options.browserChannel,
-  });
-  const context = await browser.newContext({
-    ...devices['iPhone 15'],
-    viewport: iPhone15Screen,
-    screen: iPhone15Screen,
-    recordVideo: {
-      dir: pendingDir,
-      size: iPhone15Screen,
-    },
-    locale: 'zh-CN',
-    timezoneId: 'Asia/Shanghai',
-    colorScheme: 'light',
-  });
-  const page = await context.newPage();
-  const nativeVideo = page.video();
+  let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
+  let nativeVideo: ReturnType<Page['video']> | undefined;
   const recordingStartedAt = Date.now();
   let recordedPath: string | undefined;
   let recordingCutoffAt: number | undefined;
@@ -638,6 +623,24 @@ export async function runOrderFlow(
   let failure: unknown;
 
   try {
+    browser = await chromium.launch({
+      headless: options.headless,
+      channel: process.env.PW_CHANNEL || options.browserChannel,
+    });
+    context = await browser.newContext({
+      ...devices['iPhone 15'],
+      viewport: iPhone15Screen,
+      screen: iPhone15Screen,
+      recordVideo: {
+        dir: pendingDir,
+        size: iPhone15Screen,
+      },
+      locale: 'zh-CN',
+      timezoneId: 'Asia/Shanghai',
+      colorScheme: 'light',
+    });
+    const page = await context.newPage();
+    nativeVideo = page.video();
     mark(`打开页面：流程 ${order.pageOrder}`);
     await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
     if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, markRecordingCutoff);
@@ -655,12 +658,16 @@ export async function runOrderFlow(
   } finally {
     try {
       // 原生 Video 只有在 context 关闭后才保证已写入磁盘。
-      await context.close();
+      if (context) await context.close();
       if (nativeVideo) recordedPath = await nativeVideo.path();
     } catch (error) {
       if (!failure) failure = error;
     }
-    await browser.close();
+    try {
+      if (browser) await browser.close();
+    } catch (error) {
+      if (!failure) failure = error;
+    }
   }
 
   const videoPath = await finalizeVideo({

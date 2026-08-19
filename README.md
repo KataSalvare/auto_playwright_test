@@ -254,3 +254,5 @@ scripts\start-quick-test.bat stop
 - `parameters`：页面参数字典及必填/可选标记
 
 页面不会上传业务数据；链接和测试参数仅保存在当前浏览器。当前运行记录会写入 `localStorage`，刷新页面或重新打开浏览器后仍可恢复；服务端还会将运行记录写入 `output/quick-test-runs/<runId>/run.json`，重启服务后可以继续查看已完成记录。开始新测试后会替换当前结果。点击开始测试后，控制台会调用现有的 `runOrderFlow` 自动化脚本，按并发批次执行；快速测试页面生成的成功视频独立保存在 `output/quick-test-videos/success`，由快速测试服务通过 `/quick-test-videos/...` 提供本地播放，不会与命令行 `output/videos` 混用。
+
+快速测试服务还提供全局先进先出并发队列：默认最多同时运行 4 个自动化任务，超出的任务会排队等待；可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整，取值范围为 1–10，例如 `QUICK_TEST_MAX_CONCURRENCY=6 npm run quick-test:start`。服务会自动限制错误输出大小，并定期清理超过 1 小时或超过 50 条的已完成运行记录及其视频文件。
