@@ -37,6 +37,10 @@ window.TEST_CONFIG = {
       pageOrder: '2',
       socialSecurity: '1',
       autoRenewal: '1',
+      extraParams: {
+        shangdan: '安康一生',
+        bxres: '1',
+      },
     },
   ],
   parameters: [
