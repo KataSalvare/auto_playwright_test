@@ -4,7 +4,6 @@
   const config = window.TEST_CONFIG || {};
   const requiredKeys = (config.parameters || []).filter((item) => item.group === 'required').map((item) => item.key);
   const optionalKeys = (config.parameters || []).filter((item) => item.group === 'optional').map((item) => item.key);
-  const runStorageKey = 'quick-test-current-run-v1';
   const state = { mode: 'auto', presetId: config.presets?.[0]?.id || '', currentUrl: '', validation: null, run: null };
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -35,16 +34,20 @@
   function selectPreset(presetId) { state.presetId = presetId; const preset = currentPreset(); setInput('pageOrder', preset.pageOrder ?? config.defaults?.pageOrder ?? '1'); setInput('socialSecurity', preset.socialSecurity ?? config.defaults?.socialSecurity ?? '1'); setInput('autoRenewal', preset.autoRenewal ?? config.defaults?.autoRenewal ?? '1'); setInput('shangdan', preset.extraParams?.shangdan ?? config.defaults?.shangdan ?? ''); renderPresets(); }
   function renderParameterTable() { $('#parameterTable').innerHTML = (config.parameters || []).map((item) => `<tr><td>${escapeHtml(item.key)}</td><td>${escapeHtml(item.label)}</td><td><span class="param-type ${item.group === 'required' ? 'required' : ''}">${item.group === 'required' ? 'REQUIRED' : 'OPTIONAL'}</span></td><td>${escapeHtml(item.description)}</td><td><span class="param-status">●</span></td></tr>`).join(''); }
 
-  function persistRun() {
-    if (!state.run?.runId) return;
-    try { window.localStorage.setItem(runStorageKey, JSON.stringify({ ...state.run, currentUrl: state.currentUrl })); } catch { /* 浏览器禁用存储时保持内存模式 */ }
-  }
-  function restoreRun() {
+  async function restoreRun() {
     let savedRun;
-    try { savedRun = JSON.parse(window.localStorage.getItem(runStorageKey) || 'null'); } catch { savedRun = null; }
-    if (!savedRun?.runId || !Array.isArray(savedRun.results) || !savedRun.total) return;
-    state.run = savedRun;
-    state.currentUrl = savedRun.currentUrl || '';
+    try {
+      const response = await fetch('/api/quick-test/runs', { cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || '无法读取服务器测试记录');
+      savedRun = payload.runs?.[0];
+    } catch {
+      return;
+    }
+    if (!savedRun?.runId || !Array.isArray(savedRun.results) || !savedRun.total || state.run) return;
+    state.run = { runId: savedRun.runId, total: savedRun.total, concurrency: savedRun.concurrency || 1, completed: savedRun.completedCount || 0, success: savedRun.success || 0, failed: savedRun.failed || 0, startedAt: savedRun.startedAt || Date.now(), completedAt: savedRun.completedAt || null, status: savedRun.status || 'completed', results: [] };
+    state.currentUrl = savedRun.targetUrl || '';
+    applyRunPayload(savedRun);
     if (state.currentUrl) {
       try { validateAndRender(state.currentUrl, '已恢复上次链接'); } catch { state.validation = null; }
     }
@@ -64,7 +67,7 @@
       if (!state.run) return;
       state.run.results = state.run.results.map((item) => item.status === 'queued' || item.status === 'running' ? { ...item, status: 'failed', error: '页面刷新后无法恢复脚本状态' } : item);
       state.run.failed = state.run.results.filter((item) => item.status === 'failed').length; state.run.completed = state.run.results.length; state.run.completedAt = Date.now();
-      $('#runProgress').hidden = true; $('#runAgainButton').disabled = false; setRunStatus('error', '执行状态已失效'); persistRun(); renderRun(); showToast(error instanceof Error ? error.message : '执行状态已失效');
+      $('#runProgress').hidden = true; $('#runAgainButton').disabled = false; setRunStatus('error', '执行状态已失效'); renderRun(); showToast(error instanceof Error ? error.message : '执行状态已失效');
     });
   }
 
@@ -102,7 +105,7 @@
   function normalizeNumberInput(id) { const input = $(`#${id}`); input.value = clampNumber(input.value, Number(input.min), Number(input.max)); updatePlanPreview(); }
 
   function createPendingResults(total) { return Array.from({ length: total }, (_, offset) => ({ index: offset + 1, status: 'queued', successful: false, duration: '—', videoUrl: '', error: '' })); }
-  function applyRunPayload(payload) { if (!state.run) return; state.run.runId = payload.runId || state.run.runId; state.run.status = payload.status || state.run.status; state.run.completed = payload.completedCount ?? state.run.completed; state.run.success = payload.success ?? state.run.success; state.run.failed = payload.failed ?? state.run.failed; state.run.completedAt = payload.completedAt || state.run.completedAt; state.run.results = (payload.results || state.run.results).map((item) => ({ ...item, status: item.status || (item.successful ? 'success' : 'failed'), successful: Boolean(item.successful), duration: item.duration || '—', videoUrl: item.videoUrl || '', error: item.error || '' })); persistRun(); }
+  function applyRunPayload(payload) { if (!state.run) return; state.run.runId = payload.runId || state.run.runId; state.run.status = payload.status || state.run.status; state.run.completed = payload.completedCount ?? state.run.completed; state.run.success = payload.success ?? state.run.success; state.run.failed = payload.failed ?? state.run.failed; state.run.completedAt = payload.completedAt || state.run.completedAt; state.run.results = (payload.results || state.run.results).map((item) => ({ ...item, status: item.status || (item.successful ? 'success' : 'failed'), successful: Boolean(item.successful), duration: item.duration || '—', videoUrl: item.videoUrl || '', error: item.error || '' })); }
   async function pollRun(runId) { while (state.run?.runId === runId && !state.run.completedAt) { await delay(500); const response = await fetch(`/api/quick-test/run/${encodeURIComponent(runId)}`); const payload = await response.json(); if (!response.ok) throw new Error(payload.error || '无法读取测试执行状态'); applyRunPayload(payload); renderRun(); if (payload.done) break; } }
   async function startTests() {
     if (!state.validation?.allValid) { showToast('请先通过链接规范校验'); return; }
@@ -121,10 +124,18 @@
   function clearRun() { $('#resultsEmpty').hidden = false; $('#resultsContent').hidden = true; $('#runProgress').hidden = true; $('#step4').classList.add('is-locked'); setRunStatus('idle', '尚未执行'); }
   function statusText(status) { return ({ queued: '排队中', running: '执行中', success: '成功', failed: '失败' })[status] || '未知'; }
   function statusClass(status) { return status === 'success' ? 'success' : status === 'failed' ? 'failed' : 'pending'; }
+  function renderRunActions(item, canDelete) {
+    const hasVideo = item.status === 'success' && item.videoUrl;
+    const viewAction = hasVideo ? `<button class="run-action run-video" type="button" data-video-url="${escapeHtml(item.videoUrl)}" data-video-title="第 ${item.index} 次测试视频">查看视频</button>` : item.status === 'success' ? '<span class="run-action-empty">视频待生成</span>' : '';
+    const downloadAction = hasVideo ? `<a class="run-action video-download" href="${escapeHtml(item.videoUrl)}" download="quick-test-${item.index}.mp4">下载视频</a>` : '';
+    const deleteAction = canDelete ? `<button class="run-action record-delete" type="button" data-result-index="${item.index}">删除记录</button>` : '';
+    if (!viewAction && !downloadAction && !deleteAction) return '<span class="run-action-empty">—</span>';
+    return `<span class="run-action-slot">${viewAction}</span><span class="run-action-slot">${downloadAction}</span><span class="run-action-slot">${deleteAction}</span>`;
+  }
   function renderRun() {
     const run = state.run; if (!run) return; const visibleResults = run.results.filter((item) => !item.deleted); const successCount = visibleResults.filter((item) => item.status === 'success').length; const failedCount = visibleResults.filter((item) => item.status === 'failed').length; const completedCount = run.results.filter((item) => item.status === 'success' || item.status === 'failed').length; const durationEnd = run.completedAt || Date.now(); $('#metricTotal').textContent = visibleResults.length; $('#metricSuccess').textContent = successCount; $('#metricFailed').textContent = failedCount; $('#metricDuration').textContent = completedCount ? `${((durationEnd - run.startedAt) / 1000).toFixed(1)}s` : '—'; $('#runProgressText').textContent = `${completedCount} / ${run.total}`; $('#runProgressBar').style.width = `${(completedCount / run.total) * 100}%`;
-    $('#runTable').innerHTML = visibleResults.slice().sort((a, b) => a.index - b.index).map((item) => { const canDelete = Boolean(run.completedAt); return `<div class="run-row"><span class="run-index">#${String(item.index).padStart(2, '0')}</span><span class="run-status ${statusClass(item.status)}"><i></i>${statusText(item.status)}</span><span class="run-duration">${escapeHtml(item.duration)}</span><span class="run-actions">${canDelete ? `<button class="record-delete" type="button" data-result-index="${item.index}">删除记录</button>` : '<span class="run-action-empty">—</span>'}</span></div>`; }).join('') || '<div class="run-table-empty">暂无测试记录。</div>';
-    $$('.record-delete').forEach((button) => button.addEventListener('click', () => deleteRecord(Number(button.dataset.resultIndex)))); const videos = visibleResults.filter((item) => item.status === 'success' && item.videoUrl); $('#videoCount').textContent = `${videos.length} 条`; $('#videoList').innerHTML = videos.length ? videos.map((item) => `<button class="video-card" type="button" data-video-url="${escapeHtml(item.videoUrl)}" data-video-title="第 ${item.index} 次测试视频"><span class="video-thumb"><span>▶</span></span><span><strong>第 ${item.index} 次测试</strong><small>成功视频 · 点击播放</small></span><span class="video-arrow">↗</span></button>`).join('') : '<div class="video-empty">成功后的视频会显示在这里。</div>'; $$('.video-card').forEach((button) => button.addEventListener('click', () => openVideo(button.dataset.videoUrl, button.dataset.videoTitle)));
+    $('#runTable').innerHTML = visibleResults.slice().sort((a, b) => b.index - a.index).map((item) => { const canDelete = Boolean(run.completedAt); return `<div class="run-row"><span class="run-index">#${String(item.index).padStart(2, '0')}</span><span class="run-status ${statusClass(item.status)}"><i></i>${statusText(item.status)}</span><span class="run-duration">${escapeHtml(item.duration)}</span><span class="run-actions">${renderRunActions(item, canDelete)}</span></div>`; }).join('') || '<div class="run-table-empty">暂无测试记录。</div>';
+    $$('.record-delete').forEach((button) => button.addEventListener('click', () => deleteRecord(Number(button.dataset.resultIndex)))); $$('.run-video').forEach((button) => button.addEventListener('click', () => openVideo(button.dataset.videoUrl, button.dataset.videoTitle)));
   }
   async function deleteRecord(index) { if (!state.run?.runId || !window.confirm(`确定删除第 ${index} 条测试记录及其视频吗？`)) return; await deleteRunResource(`/api/quick-test/run/${encodeURIComponent(state.run.runId)}/results/${index}`, '测试记录已删除'); }
   async function deleteRunResource(url, successMessage) { try { const response = await fetch(url, { method: 'DELETE' }); const payload = await response.json(); if (!response.ok) throw new Error(payload.error || '删除失败'); applyRunPayload(payload); renderRun(); showToast(successMessage); } catch (error) { showToast(error instanceof Error ? error.message : '删除失败'); } }

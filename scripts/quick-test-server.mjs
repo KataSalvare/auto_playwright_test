@@ -271,6 +271,7 @@ function publicRun(run) {
   const failed = run.results.filter((item) => item.status === 'failed').length;
   return {
     runId: run.runId,
+    targetUrl: run.targetUrl,
     total: run.total,
     concurrency: run.concurrency,
     status: run.status,
@@ -394,6 +395,13 @@ async function updateQuickTestResult(request, response, runId, indexText) {
 async function handleQuickTestApi(request, response) {
   cleanupCompletedRuns();
   const pathname = new URL(request.url || '/', 'http://quick-test.local').pathname;
+  if (pathname === '/api/quick-test/runs' && request.method === 'GET') {
+    const runs = [...QUICK_TEST_RUNS.values()]
+      .sort((left, right) => (right.startedAt || 0) - (left.startedAt || 0))
+      .map(publicRun);
+    sendJson(response, 200, { runs });
+    return;
+  }
   if (pathname === '/api/quick-test/run') { await createQuickTest(request, response); return; }
   const resultMatch = pathname.match(/^\/api\/quick-test\/run\/([^/]+)\/results\/(\d+)$/);
   if (resultMatch && request.method === 'DELETE') { await updateQuickTestResult(request, response, resultMatch[1], resultMatch[2]); return; }
