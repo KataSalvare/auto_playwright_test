@@ -3,6 +3,12 @@ import { mkdir, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+let videoSequence = 0;
+
+function uniqueVideoSuffix(): string {
+  videoSequence = (videoSequence + 1) % 1_000_000;
+  return `${Date.now()}${process.pid}${videoSequence}`;
+}
 
 function safeFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -70,7 +76,7 @@ export async function finalizeVideo({
 
     const failedDir = `${outputDir}/failed`;
     await mkdir(failedDir, { recursive: true });
-    const failedPath = `${failedDir}/${safeFilename(orderId)}-failed-${Date.now()}.mp4`;
+    const failedPath = `${failedDir}/${safeFilename(orderId)}-failed-${uniqueVideoSuffix()}.mp4`;
     await transcodeVideo({ inputPath: recordedPath, outputPath: failedPath });
     await rm(recordedPath, { force: true });
     return failedPath;
@@ -78,7 +84,7 @@ export async function finalizeVideo({
 
   const successDir = `${outputDir}/success`;
   await mkdir(successDir, { recursive: true });
-  const successPath = `${successDir}/${safeFilename(orderId)}-success-${Date.now()}.mp4`;
+  const successPath = `${successDir}/${safeFilename(orderId)}-success-${uniqueVideoSuffix()}.mp4`;
   await transcodeVideo({
     inputPath: recordedPath,
     outputPath: successPath,

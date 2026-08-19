@@ -17,7 +17,7 @@ export const automationConfig = {
   // 并在 Terminal.app 或 iTerm2 中运行。
 
   // true：失败视频移动到 output/videos/failed/；false：未出现 success 时删除视频。
-  deleteFailedVideo: false,
+  deleteFailedVideo: true,
 
   outputDir: resolve('output/videos'),
 } satisfies AutomationConfig;

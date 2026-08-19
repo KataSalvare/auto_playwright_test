@@ -8,6 +8,7 @@
 |---|---|---|
 | 单次订单流程 | `npm run automation -- --fixture=first-order` | 执行一条首单流程 |
 | 两条内置流程 | `npm run automation:fixtures` | 按顺序执行首单和非首单 |
+| 命令行批量队列 | `npm run automation:queue` | 读取配置中的链接列表，按并发数执行 |
 | 可视化快速测试 | `npm run quick-test:start` | 在浏览器页面中生成链接、设置次数并执行并发测试 |
 
 快速测试页面和命令行自动化使用同一套 `runOrderFlow` 核心流程；两者的区别只是入口和结果展示方式。
@@ -19,7 +20,7 @@ npm install
 npm run test:install
 ```
 
-运行成功视频裁剪还需要安装 `ffmpeg`；只做链接校验、单元测试或失败流程验证时可以暂不安装。
+只有需要生成 MP4 时才需要安装 `ffmpeg`：成功视频始终需要转码；当 `deleteFailedVideo=true` 时，失败视频也需要转码后才能保留。只做链接校验、单元测试或删除失败视频的流程验证时可以暂不安装。
 
 默认使用 Playwright 的 headless shell，不会启动 macOS 的 Google Chrome 应用。
 如果从 Codex 沙箱执行订单流程，脚本会在启动浏览器前直接提示切换到普通终端，
@@ -36,8 +37,6 @@ PW_CHANNEL=chrome npm run automation:terminal -- --fixture=first-order
 ```text
 output/videos/success/<订单号>-success-<时间戳>.mp4
 ```
-
-生成 MP4 和裁剪视频需要本机安装 `ffmpeg`。
 
 自动化浏览器固定模拟 iPhone 15，页面和录像尺寸均为 `392×852`。
 
@@ -223,6 +222,34 @@ page.getByTestId('success')
 输入逻辑包含 5 种输入节奏，并由 seed 控制错误输入、删除重输、漏输修正和等待时长。
 调试或对比输入节奏时，可通过 `--input-strategy` 固定为
 `sequential`、`chunked`、`variable`、`pause-after-prefix` 或 `slow-tail`。
+
+## 命令行批量队列
+
+批量命令行测试配置位于 [automation.queue.config.ts](/Users/much/代码/仿朝发可回溯/automation.queue.config.ts)，只需要填写链接和并发数：
+
+```ts
+export const automationQueueConfig = {
+  concurrency: 2,
+  links: [
+    { name: '首单测试', url: 'https://your-test-url.example.com/...' },
+    { name: '非首单测试', url: 'https://your-test-url.example.com/...' },
+  ],
+};
+```
+
+执行队列：
+
+```bash
+npm run automation:queue
+```
+
+任务按 `links` 的数组顺序进入 FIFO 队列，同时运行的浏览器数量由 `concurrency` 控制，范围为 1–10。某个链接失败后，队列会继续执行后续链接；命令最后会汇总成功/失败数量，并在存在失败任务时返回退出码 1。只校验配置和链接、不启动浏览器时可以使用：
+
+```bash
+npm run automation:queue -- --dry-run
+```
+
+队列命令沿用 [automation.config.ts](/Users/much/代码/仿朝发可回溯/automation.config.ts) 中的无头模式、失败视频策略和输出目录配置。
 
 ## 验证
 

@@ -16,6 +16,7 @@
     "automation:help": "tsx scripts/order-flow.ts --help",
     "automation:terminal": "zsh scripts/run-automation-terminal.command",
     "automation:fixtures": "tsx scripts/run-fixtures.ts",
+    "automation:queue": "tsx scripts/run-automation-queue.ts",
     "quick-test:start": "node scripts/quick-test-server.mjs start",
     "quick-test:restart": "node scripts/quick-test-server.mjs restart",
     "quick-test:stop": "node scripts/quick-test-server.mjs stop",

@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "types": ["node", "@playwright/test"]
   },
-  "include": ["automation.config.ts", "playwright.config.ts", "src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
+  "include": ["automation.config.ts", "automation.queue.config.ts", "playwright.config.ts", "src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
 }
