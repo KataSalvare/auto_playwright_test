@@ -218,7 +218,7 @@ npm test
 
 快速测试控制台位于 [web/index.html](/Users/much/代码/仿朝发可回溯/web/index.html)，用于生成和校验业务测试链接。
 
-直接在浏览器打开 `web/index.html` 即可使用；如果浏览器限制了本地文件脚本，也可以在项目根目录启动静态服务：
+直接在浏览器打开 `web/index.html` 可以生成和校验链接；如需点击“开始测试”执行真实 Playwright 流程，应先启动下面的快速测试服务。浏览器限制本地文件脚本时，也可以在项目根目录启动静态服务：
 
 ```bash
 python3 -m http.server 4173
@@ -252,6 +252,5 @@ scripts\start-quick-test.bat stop
 - `defaults`：订单号前缀、姓名池、手机号前缀、价格、`shangdan`、`outerid` 和环境标记
 - `presets`：首单、非首单等流程预设，以及预设要附带的额外参数
 - `parameters`：页面参数字典及必填/可选标记
-- `videoBaseUrl`：成功视频的统一地址前缀；为空时页面仍会展示视频结果卡片，但提示视频地址待接入
 
-页面不会上传业务数据；最近生成的链接仅保存在当前浏览器的 `localStorage` 中。
+页面不会上传业务数据；最近生成的链接仅保存在当前浏览器的 `localStorage` 中。点击开始测试后，控制台会调用现有的 `runOrderFlow` 自动化脚本，按并发批次执行；结果中的成功视频来自 `output/videos/success`，由快速测试服务通过 `/videos/...` 提供本地播放。

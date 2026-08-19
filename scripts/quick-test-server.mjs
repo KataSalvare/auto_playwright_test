@@ -12,7 +12,8 @@
  * 只使用 Node.js 内置模块，不依赖 Python 或额外前端服务。
  */
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
+import { mkdir, readFile } from 'node:fs/promises';
 import { extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -21,6 +22,9 @@ const SCRIPT_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const PROJECT_DIR = resolve(SCRIPT_DIR, '..');
 const WEB_ROOT = resolve(PROJECT_DIR, 'web');
 const OUTPUT_DIR = resolve(PROJECT_DIR, 'output');
+const VIDEO_ROOT = resolve(OUTPUT_DIR, 'videos');
+const QUICK_RUN_ROOT = resolve(OUTPUT_DIR, 'quick-test-runs');
+const RUNNER_SCRIPT = resolve(PROJECT_DIR, 'scripts', 'quick-test-runner.ts');
 const STATE_FILE = resolve(OUTPUT_DIR, 'quick-test-server.json');
 const LOG_FILE = resolve(OUTPUT_DIR, 'quick-test-server.log');
 const DEFAULT_PORT = 4173;
@@ -71,9 +75,107 @@ function safeWebPath(requestPath) {
   return filePath;
 }
 
+function safeVideoPath(requestPath) {
+  let pathname;
+  try { pathname = decodeURIComponent(requestPath.split('?')[0]); } catch { return null; }
+  if (!pathname.startsWith('/videos/')) return null;
+  const filePath = resolve(VIDEO_ROOT, `.${normalize(pathname.slice('/videos'.length))}`);
+  const relativePath = relative(VIDEO_ROOT, filePath);
+  if (!relativePath || relativePath.startsWith('..')) return null;
+  return filePath;
+}
+
+function sendJson(response, statusCode, payload) {
+  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  response.end(JSON.stringify(payload));
+}
+
+function requestBody(request) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1_000_000) rejectPromise(new Error('请求体过大'));
+    });
+    request.on('end', () => resolvePromise(body));
+    request.on('error', rejectPromise);
+  });
+}
+
+function videoUrl(videoPath) {
+  if (!videoPath) return '';
+  const absolutePath = resolve(videoPath);
+  const relativePath = relative(VIDEO_ROOT, absolutePath);
+  if (!relativePath || relativePath.startsWith('..')) return '';
+  return `/videos/${relativePath.split(/[/\\\\]/).map(encodeURIComponent).join('/')}`;
+}
+
+function runAutomation(index, targetUrl, runDirectory) {
+  const resultFile = resolve(runDirectory, `result-${index}.json`);
+  const command = process.platform === 'win32' ? resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx.cmd') : resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx');
+  const startedAt = Date.now();
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`], { cwd: PROJECT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let errorOutput = '';
+    child.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
+    child.on('error', (error) => resolvePromise({ index, successful: false, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: error.message }));
+    child.on('close', async (code) => {
+      let result = null;
+      try { result = JSON.parse(await readFile(resultFile, 'utf8')); } catch { /* runner may fail before writing a result */ }
+      resolvePromise({ index, successful: Boolean(result?.success) && code === 0, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: result?.error || errorOutput.trim() || (code === 0 ? '' : `自动化脚本退出码：${code}`), videoUrl: videoUrl(result?.videoPath) });
+    });
+  });
+}
+
+async function executeQuickTest(request, response) {
+  if (request.method !== 'POST') { sendJson(response, 405, { error: '只支持 POST 请求' }); return; }
+  let payload;
+  try { payload = JSON.parse(await requestBody(request)); } catch (error) { sendJson(response, 400, { error: error.message || '请求参数不是有效 JSON' }); return; }
+  const targetUrl = typeof payload?.url === 'string' ? payload.url.trim() : '';
+  const total = Number.parseInt(payload?.count, 10);
+  const concurrency = Number.parseInt(payload?.concurrency, 10);
+  if (!targetUrl || !Number.isInteger(total) || total < 1 || total > 50 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 10) {
+    sendJson(response, 400, { error: '链接、测试次数或并发数量不符合要求' });
+    return;
+  }
+
+  const runDirectory = resolve(QUICK_RUN_ROOT, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  await mkdir(runDirectory, { recursive: true });
+  const results = [];
+  for (let cursor = 0; cursor < total; cursor += concurrency) {
+    const batch = Array.from({ length: Math.min(concurrency, total - cursor) }, (_, offset) => runAutomation(cursor + offset + 1, targetUrl, runDirectory));
+    results.push(...await Promise.all(batch));
+  }
+  const success = results.filter((item) => item.successful).length;
+  sendJson(response, 200, { total, concurrency, completed: results.length, success, failed: results.length - success, results: results.sort((left, right) => left.index - right.index) });
+}
+
+function serveVideo(filePath, request, response) {
+  const fileStats = statSync(filePath);
+  const contentType = CONTENT_TYPES[extname(filePath).toLowerCase()] || 'application/octet-stream';
+  const headers = { 'Content-Type': contentType, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
+  const range = request.headers.range;
+  if (!range) { response.writeHead(200, { ...headers, 'Content-Length': fileStats.size }); createReadStream(filePath).pipe(response); return; }
+  const match = range.match(/bytes=(\d*)-(\d*)/);
+  if (!match) { response.writeHead(416, { 'Content-Range': `bytes */${fileStats.size}` }); response.end(); return; }
+  const start = match[1] ? Number(match[1]) : 0;
+  const end = match[2] ? Number(match[2]) : fileStats.size - 1;
+  if (start > end || start >= fileStats.size) { response.writeHead(416, { 'Content-Range': `bytes */${fileStats.size}` }); response.end(); return; }
+  const boundedEnd = Math.min(end, fileStats.size - 1);
+  response.writeHead(206, { ...headers, 'Content-Length': boundedEnd - start + 1, 'Content-Range': `bytes ${start}-${boundedEnd}/${fileStats.size}` });
+  createReadStream(filePath, { start, end: boundedEnd }).pipe(response);
+}
+
 function serveCommand(options) {
   if (!existsSync(WEB_ROOT)) throw new Error(`找不到前端目录：${WEB_ROOT}`);
   const server = createServer((request, response) => {
+    if ((request.url || '').split('?')[0] === '/api/quick-test/run') { executeQuickTest(request, response).catch((error) => sendJson(response, 500, { error: error.message || '自动化测试执行失败' })); return; }
+    const videoPath = safeVideoPath(request.url || '/');
+    if (videoPath) {
+      try { if (!statSync(videoPath).isFile()) throw new Error('Not found'); serveVideo(videoPath, request, response); } catch { response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); response.end('Not found'); }
+      return;
+    }
     const filePath = safeWebPath(request.url || '/');
     if (!filePath) { response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); response.end('Not found'); return; }
     let actualPath = filePath;

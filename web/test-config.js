@@ -8,8 +8,6 @@ window.TEST_CONFIG = {
   appName: '订单链路实验室',
   appVersion: 'v0.3.0',
   originalUrl: 'https://h5-subscribe.yunxiacn.com/temp-lp-jing/index/6100b6d7fb8d64de74245697b16a5a8d',
-  // 如果执行接口返回了视频地址，也可以在前端配置统一的视频目录前缀。
-  videoBaseUrl: '',
   defaults: {
     orderIdPrefix: 'QA',
     names: ['卡塔', '李明', '陈雨', '周宁'],
