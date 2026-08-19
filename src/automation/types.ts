@@ -4,6 +4,12 @@ export type PageOrder = 1 | 2;
 export type ProductChoice = 'basic' | 'upgrade';
 export type BrowseProfile = 'skimmer' | 'reader' | 'distracted';
 export type BrowserChannel = 'chrome' | 'msedge';
+export type InputStrategy =
+  | 'sequential'
+  | 'chunked'
+  | 'variable'
+  | 'pause-after-prefix'
+  | 'slow-tail';
 export type WaitFn = (durationMs: number) => Promise<void>;
 
 export type KeyboardKey =
@@ -35,6 +41,7 @@ export interface OrderInput {
 
 export interface AutomationOptions {
   seed: number;
+  inputStrategy?: InputStrategy;
   profile: BrowseProfile;
   product: ProductChoice;
   waitAgreement: boolean;

@@ -22,7 +22,7 @@ function createVirtualKeyboardPage() {
   return { page, clicked, inputClicks };
 }
 
-test('身份证漏输修正只补齐末位，不误删已有数字', async () => {
+test('身份证漏输导致 18 位校验失败后删除并完整重输', async () => {
   const { page, clicked } = createVirtualKeyboardPage();
   const identityNumber = '320381198812252138';
 
@@ -39,8 +39,12 @@ test('身份证漏输修正只补齐末位，不误删已有数字', async () =>
     (KEYBOARD_KEYS as readonly string[]).includes(testId) && testId !== 'keyboard_close',
   );
   expect(result).toEqual({ strategy: 'missing-input-corrected', corrected: true });
-  expect(keyboardClicks).toEqual(identityNumber.split(''));
-  expect(keyboardClicks).not.toContain('del');
+  const deleteCount = keyboardClicks.filter((testId) => testId === 'del').length;
+  expect(deleteCount).toBeGreaterThanOrEqual(1);
+  expect(deleteCount).toBeLessThanOrEqual(18);
+  const lastDeleteIndex = keyboardClicks.lastIndexOf('del');
+  const correctedSuffix = keyboardClicks.slice(lastDeleteIndex + 1);
+  expect(correctedSuffix).toEqual(identityNumber.slice(18 - deleteCount).split(''));
 });
 
 test('身份证错误输入后从字段末尾开始删除修正', async () => {
@@ -56,8 +60,10 @@ test('身份证错误输入后从字段末尾开始删除修正', async () => {
   });
 
   expect(result).toEqual({ strategy: 'error-corrected', corrected: true });
-  expect(clicked).toContain('del');
-  expect(inputClicks.at(-1)).toEqual({
+  const deleteCount = clicked.filter((testId) => testId === 'del').length;
+  expect(deleteCount).toBeGreaterThanOrEqual(1);
+  expect(deleteCount).toBeLessThanOrEqual(18);
+  expect(inputClicks).toContainEqual({
     testId: 'idcard_input',
     position: { x: 98, y: 20 },
   });

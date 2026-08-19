@@ -15,6 +15,9 @@ const defaultOutputDir = resolve('output/videos');
 const iPhone15Screen = { width: 392, height: 852 } as const;
 const sleep = (durationMs: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs));
 const mark = (message: string) => console.log(`· ${message}`);
+const readingOverlayTriggerMs = 2_000;
+const readingWaitPollMs = 100;
+const readingOverlayDismissChance = 0.35;
 
 /** 在多个同名元素中返回当前真正可见的元素。 */
 async function visibleLocator(locator: Locator, step: string): Promise<Locator> {
@@ -26,19 +29,70 @@ async function visibleLocator(locator: Locator, step: string): Promise<Locator> 
   throw new Error(`步骤“${step}”未找到可见元素`);
 }
 
-async function clickTestId(page: Page, testId: LocatorTestId, step: string) {
-  const target = await waitForAnyVisible(byTestId(page, testId), 10_000, step);
-  try {
-    await target.click({ timeout: 5_000 });
-  } catch (error) {
-    // 主按钮可能刚触发弹窗，弹窗遮挡会让 Playwright 报点击被拦截；
-    // 只要目标弹窗已经出现，就视为主按钮点击已生效。
-    const mainButtonTriggeredPopup = testId === LOCATORS.mainButton && (
-      await byTestId(page, LOCATORS.phoneContinue).isVisible().catch(() => false)
-      || await byTestId(page, LOCATORS.agreementContinue).isVisible().catch(() => false)
-    );
-    if (!mainButtonTriggeredPopup) throw error;
+async function visibleLocators(locator: Locator): Promise<Locator[]> {
+  const visible: Locator[] = [];
+  const count = await locator.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index);
+    if (await candidate.isVisible().catch(() => false)) visible.push(candidate);
   }
+  return visible;
+}
+
+async function hasVisible(locator: Locator): Promise<boolean> {
+  return (await visibleLocators(locator)).length > 0;
+}
+
+async function readingOverlayIsVisible(page: Page, closeTestId?: LocatorTestId): Promise<boolean> {
+  const closeVisible = closeTestId
+    ? await hasVisible(byTestId(page, closeTestId))
+    : false;
+  // 真实页面的等待蒙层使用 class="mask"，不一定带 close test id。
+  return closeVisible || await hasVisible(page.locator('.mask'));
+}
+
+async function clickTestId(
+  page: Page,
+  testId: LocatorTestId,
+  step: string,
+  options: { overlayClose?: LocatorTestId } = {},
+) {
+  const targetLocator = byTestId(page, testId);
+  await waitForAnyVisible(targetLocator, 10_000, step);
+  const targets = await visibleLocators(targetLocator);
+  let lastError: unknown;
+
+  // 页面可能同时保留底层按钮和蒙层内按钮，优先尝试后渲染的按钮。
+  for (const target of [...targets].reverse()) {
+    try {
+      await target.click({ timeout: 5_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  // 阅读等待期间的蒙层不应让按钮点击失败；全部普通点击失败后再走 force。
+  if (await readingOverlayIsVisible(page, options.overlayClose)) {
+    mark(`${step}：蒙层仍在显示，继续触发按钮点击`);
+    for (const target of [...targets].reverse()) {
+      try {
+        await target.click({ timeout: 5_000, force: true });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+
+  // 主按钮可能刚触发弹窗，弹窗遮挡会让 Playwright 报点击被拦截；
+  // 只要目标弹窗已经出现，就视为主按钮点击已生效。
+  const mainButtonTriggeredPopup = testId === LOCATORS.mainButton && (
+    await byTestId(page, LOCATORS.phoneContinue).isVisible().catch(() => false)
+    || await byTestId(page, LOCATORS.agreementContinue).isVisible().catch(() => false)
+  );
+  if (mainButtonTriggeredPopup) return;
+  throw lastError;
 }
 
 async function clickIfAppears(page: Page, testId: LocatorTestId, timeoutMs = 5_000) {
@@ -63,15 +117,62 @@ async function waitForAnyVisible(locator: Locator, timeoutMs: number, step = '�
   throw new Error(`在 ${timeoutMs}ms 内未找到${step}`);
 }
 
-async function failIfClosed(page: Page, testId: LocatorTestId, step: string) {
-  const close = byTestId(page, testId);
-  if (await close.isVisible().catch(() => false)) {
-    throw new Error(`步骤“${step}”检测到用户关闭弹窗`);
+/**
+ * 模拟用户在协议/产品弹窗中浏览一段时间。
+ *
+ * 页面在等待约 2 秒后可能展示蒙层。这里只观察它，不把蒙层视为失败；
+ * 用户也可能已经手动关闭蒙层，后续仍应继续点击业务按钮。
+ */
+async function waitWhileBrowsing(
+  page: Page,
+  overlayClose: LocatorTestId,
+  random: () => number,
+  minMs: number,
+  maxMs: number,
+  step: string,
+) {
+  const durationMs = Math.round(randomBetween(random, minMs, maxMs));
+  const startedAt = Date.now();
+  let overlayDetected = false;
+  let overlayDismissed = false;
+
+  while (Date.now() - startedAt < durationMs) {
+    const elapsedMs = Date.now() - startedAt;
+    if (!overlayDetected && elapsedMs >= readingOverlayTriggerMs) {
+      overlayDetected = await readingOverlayIsVisible(page, overlayClose);
+      if (overlayDetected) {
+        mark(`${step}：浏览等待超过 ${readingOverlayTriggerMs / 1_000} 秒，检测到蒙层`);
+        // 模拟一部分用户会主动关闭蒙层，再继续浏览一会儿。
+        if (random() < readingOverlayDismissChance) {
+          const close = byTestId(page, overlayClose);
+          try {
+            await close.click({ timeout: 1_500 });
+            overlayDismissed = true;
+            mark(`${step}：用户关闭蒙层，继续浏览后再点击按钮`);
+            await pauseAfterStep(random);
+          } catch {
+            // 蒙层可能已被页面或用户关闭；后续按钮点击仍按容错路径处理。
+          }
+        }
+      }
+    }
+
+    const remainingMs = durationMs - (Date.now() - startedAt);
+    await sleep(Math.min(readingWaitPollMs, Math.max(remainingMs, 0)));
+  }
+
+  if (overlayDetected && !overlayDismissed) {
+    mark(`${step}：蒙层不阻断后续按钮点击，继续完成浏览等待`);
   }
 }
 
 async function waitConfigured(random: () => number, minMs: number, maxMs: number) {
   await sleep(Math.round(randomBetween(random, minMs, maxMs)));
+}
+
+/** 每个业务步骤完成后模拟用户观察页面的 1–2 秒停顿。 */
+async function pauseAfterStep(random: () => number) {
+  await waitConfigured(random, 1_000, 2_000);
 }
 
 async function ensureAgreementChecked(page: Page) {
@@ -85,7 +186,12 @@ async function ensureAgreementChecked(page: Page) {
 
 async function selectProduct(page: Page, product: AutomationOptions['product']) {
   const testId = product === 'basic' ? LOCATORS.basicProduct : LOCATORS.upgradeProduct;
-  await clickTestId(page, testId, product === 'basic' ? '选择基础版' : '选择升级版');
+  await clickTestId(
+    page,
+    testId,
+    product === 'basic' ? '选择基础版' : '选择升级版',
+    { overlayClose: LOCATORS.productClose },
+  );
 }
 
 async function selectBooleanOption(
@@ -107,21 +213,38 @@ async function runAgreementAndProductFlow(
   productStep: number,
   markRecordingCutoff: () => void,
 ) {
-  // 协议或产品弹窗被关闭，表示本次订单流程失败。
-  await failIfClosed(page, LOCATORS.agreementClose, '强制阅读协议');
-  // 主按钮已经触发协议弹窗，模拟用户阅读后再继续。
+  // 主按钮已经触发协议弹窗，模拟用户阅读/浏览后再继续。
   if (options.waitAgreement) {
-    mark(`${flowLabel}步骤 ${agreementStep}：协议弹窗随机等待 2–5 秒`);
-    await waitConfigured(random, 2_000, 5_000);
+    mark(`${flowLabel}步骤 ${agreementStep}：协议弹窗浏览等待 2–5 秒`);
+    await waitWhileBrowsing(
+      page,
+      LOCATORS.agreementClose,
+      random,
+      2_000,
+      5_000,
+      `${flowLabel}步骤 ${agreementStep}`,
+    );
   }
   mark(`${flowLabel}步骤 ${agreementStep}：点击强制阅读协议弹窗同意并继续`);
-  await clickTestId(page, LOCATORS.agreementContinue, '协议同意并继续');
+  await clickTestId(
+    page,
+    LOCATORS.agreementContinue,
+    '协议同意并继续',
+    { overlayClose: LOCATORS.agreementClose },
+  );
+  await pauseAfterStep(random);
 
-  await failIfClosed(page, LOCATORS.productClose, '选择产品');
-  // 协议确认已经触发产品弹窗，模拟用户查看产品后再选择。
+  // 协议确认已经触发产品弹窗，模拟用户查看/浏览产品后再选择。
   if (options.waitProduct) {
-    mark(`${flowLabel}步骤 ${productStep}：产品弹窗随机等待 2–5 秒`);
-    await waitConfigured(random, 2_000, 5_000);
+    mark(`${flowLabel}步骤 ${productStep}：产品弹窗浏览等待 2–5 秒`);
+    await waitWhileBrowsing(
+      page,
+      LOCATORS.productClose,
+      random,
+      2_000,
+      5_000,
+      `${flowLabel}步骤 ${productStep}`,
+    );
   }
   mark(`${flowLabel}步骤 ${productStep}：选择${options.product === 'basic' ? '基础版' : '升级版'}产品`);
   await selectProduct(page, options.product);
@@ -155,19 +278,29 @@ async function runFirstOrder(
     page,
     value: order.phone,
     seed: options.seed,
+    inputStrategy: options.inputStrategy,
     errorChance: options.phoneErrorChance,
   });
+  await pauseAfterStep(random);
   // 步骤 2：如果出现手机号确认弹窗，点击“同意并继续”。
   mark('首单步骤 2：处理手机号确认弹窗');
   await clickIfAppears(page, LOCATORS.phoneContinue);
+  await pauseAfterStep(random);
 
   // 步骤 3：等待页面切换到实名信息区域。
   mark('首单步骤 3：等待页面进入实名信息');
-  await waitConfigured(random, 3_000, 5_000);
+  await waitConfigured(random, 2_000, 3_000);
+  await pauseAfterStep(random);
 
   // 步骤 4：输入姓名。
   mark('首单步骤 4：输入姓名');
-  await fillName({ page, value: order.name, seed: options.seed });
+  await fillName({
+    page,
+    value: order.name,
+    seed: options.seed,
+    inputStrategy: options.inputStrategy,
+  });
+  await pauseAfterStep(random);
 
   // 步骤 5：通过自定义身份证键盘输入身份证。
   mark('首单步骤 5：输入身份证');
@@ -175,9 +308,11 @@ async function runFirstOrder(
     page,
     value: order.identityNumber,
     seed: options.seed,
+    inputStrategy: options.inputStrategy,
     errorChance: options.identityErrorChance,
     missingChance: options.identityMissingChance,
   });
+  await pauseAfterStep(random);
 
   if (!hasValidIdentityChecksum(order.identityNumber)) {
     throw new Error(
@@ -194,6 +329,7 @@ async function runFirstOrder(
     LOCATORS.socialSecurityNo,
     '选择社保状态',
   );
+  await pauseAfterStep(random);
 
   // 步骤 7：选择是否自动续保。
   mark('首单步骤 7：选择续保状态');
@@ -204,14 +340,17 @@ async function runFirstOrder(
     LOCATORS.renewalNo,
     '选择续保状态',
   );
+  await pauseAfterStep(random);
 
   // 步骤 8：勾选协议。
   mark('首单步骤 8：勾选同意协议');
   await ensureAgreementChecked(page);
+  await pauseAfterStep(random);
 
   // 步骤 9：点击“点此登录/完善信息”进入保障流程。
   mark('首单步骤 9：点击完善信息');
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
+  await pauseAfterStep(random);
 
   // 步骤 10、11：处理协议弹窗并选择产品。
   await runAgreementAndProductFlow(page, options, random, '首单', 10, 11, markRecordingCutoff);
@@ -225,18 +364,21 @@ async function runRepeatOrder(
 ) {
   /* 非首单步骤：1 等待页面；2 勾选协议；3 完善信息；4 协议弹窗；5 产品；6 成功 Toast。 */
   // 步骤 1 前：页面打开后先随机等待，暂不执行滚动等浏览操作。
-  mark('非首单步骤 1 前：随机等待 5–8 秒');
-  await waitConfigured(random, 5_000, 8_000);
+  mark('非首单步骤 1 前：随机等待 6–9 秒');
+  await waitConfigured(random, 6_000, 9_000);
   // 步骤 1：页面稳定后继续处理已有实名信息。
   mark('非首单步骤 1：页面稳定');
+  await pauseAfterStep(random);
 
   // 步骤 2：确保协议处于勾选状态。
   mark('非首单步骤 2：勾选同意协议');
   await ensureAgreementChecked(page);
+  await pauseAfterStep(random);
 
   // 步骤 3：点击“完善信息”进入保障流程。
   mark('非首单步骤 3：点击完善信息');
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
+  await pauseAfterStep(random);
 
   // 步骤 4、5：处理协议弹窗并选择产品。
   await runAgreementAndProductFlow(page, options, random, '非首单', 4, 5, markRecordingCutoff);

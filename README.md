@@ -120,6 +120,7 @@ npm run automation -- "https://your-test-url.example.com/..."
 ```bash
 npm run automation -- --fixture=first-order --seed=20260818
 npm run automation -- --fixture=first-order --profile=reader
+npm run automation -- --fixture=first-order --input-strategy=chunked
 npm run automation -- --fixture=first-order --product=upgrade
 npm run automation -- --fixture=first-order --wait-agreement=false
 npm run automation -- --fixture=first-order --wait-product=false
@@ -147,8 +148,8 @@ npm run automation -- --fixture=first-order --dry-run
 7. 选择续保状态
 8. 勾选同意协议
 9. 点击完善信息
-10. 触发协议弹窗后随机等待 1–5 秒，再同意强制阅读协议
-11. 触发产品弹窗后随机等待 2–5 秒，选择基础版或升级版产品，再等待 2–3 秒记录裁剪点
+10. 触发协议弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断同意按钮；用户关闭蒙层后仍可继续浏览再点击
+11. 触发产品弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断产品按钮；用户关闭蒙层后仍可继续浏览再点击
 12. 浏览器继续保留并监控成功 Toast，context 关闭后完成原生视频并按裁剪点生成 MP4
 
 非首单流程：
@@ -156,8 +157,8 @@ npm run automation -- --fixture=first-order --dry-run
 1. 步骤开始前随机等待 1–3 秒，等待页面稳定
 2. 勾选同意协议
 3. 点击完善信息
-4. 触发协议弹窗后随机等待 1–5 秒，再同意强制阅读协议
-5. 触发产品弹窗后随机等待 2–5 秒，选择基础版或升级版产品，再等待 2–3 秒记录裁剪点
+4. 触发协议弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断同意按钮；用户关闭蒙层后仍可继续浏览再点击
+5. 触发产品弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断产品按钮；用户关闭蒙层后仍可继续浏览再点击
 6. 浏览器继续保留并监控成功 Toast，context 关闭后完成原生视频并按裁剪点生成 MP4
 
 ## 定位器
@@ -195,6 +196,8 @@ page.getByTestId('success')
 - `distracted`：较短滚动、停顿范围更大、较高回滑概率
 
 输入逻辑包含 5 种输入节奏，并由 seed 控制错误输入、删除重输、漏输修正和等待时长。
+调试或对比输入节奏时，可通过 `--input-strategy` 固定为
+`sequential`、`chunked`、`variable`、`pause-after-prefix` 或 `slow-tail`。
 
 ## 验证
 

@@ -3,13 +3,20 @@ import { automationConfig } from '../automation.config';
 import { ORDER_FIXTURES, type OrderFixtureName } from '../src/automation/order-links';
 import { runOrderFlow } from '../src/automation/order-flow';
 import { parseOrderUrl, safeUrlDescription } from '../src/automation/url-config';
-import type { AutomationOptions, BrowseProfile, ProductChoice } from '../src/automation/types';
+import type { AutomationOptions, BrowseProfile, InputStrategy, ProductChoice } from '../src/automation/types';
 
 /**
  * 单条订单自动化测试入口：解析参数、选择流程、启动移动端浏览器并录制视频。
  */
 const profiles = new Set<BrowseProfile>(['skimmer', 'reader', 'distracted']);
 const products = new Set<ProductChoice>(['basic', 'upgrade']);
+const inputStrategies = new Set<InputStrategy>([
+  'sequential',
+  'chunked',
+  'variable',
+  'pause-after-prefix',
+  'slow-tail',
+]);
 
 function printHelp() {
   console.log(`订单自动化脚本
@@ -22,6 +29,7 @@ function printHelp() {
 选项：
   --fixture=first-order|repeat-order  使用内置测试链接
   --seed=<整数>                       固定随机行为
+  --input-strategy=<方案>             强制输入方案：sequential|chunked|variable|pause-after-prefix|slow-tail
   --profile=reader|skimmer|distracted 移动浏览画像，默认 reader
   --product=basic|upgrade             产品选择，默认 basic
   --wait-agreement=true|false         是否等待协议蒙层，默认 true
@@ -46,6 +54,7 @@ function parseArgs(argv: string[]) {
   let dryRun = false;
   const options: AutomationOptions = {
     seed: Date.now(),
+    inputStrategy: undefined,
     profile: 'reader',
     product: 'basic',
     waitAgreement: true,
@@ -95,6 +104,11 @@ function parseArgs(argv: string[]) {
       const seed = Number(value);
       if (!Number.isInteger(seed)) throw new Error('--seed 必须是整数');
       options.seed = seed;
+    } else if (name === 'input-strategy') {
+      if (!value || !inputStrategies.has(value as InputStrategy)) {
+        throw new Error(`未知输入方案：${value ?? ''}`);
+      }
+      options.inputStrategy = value as InputStrategy;
     } else if (name === 'profile') {
       if (!value || !profiles.has(value as BrowseProfile)) throw new Error(`未知浏览画像：${value ?? ''}`);
       options.profile = value as BrowseProfile;
@@ -130,6 +144,7 @@ async function main() {
 
   console.log(`订单 ${order.orderId}：${fixture ?? 'custom-url'}，流程 ${order.pageOrder}`);
   console.log(`页面：${safeUrlDescription(targetUrl)}`);
+  console.log(`输入方案：${options.inputStrategy ?? '按 seed 随机'}`);
 
   if (dryRun) {
     console.log('参数校验通过，未启动浏览器。');
