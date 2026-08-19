@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   chooseFirstOrderPreButtonPath,
   chooseRandomBrowseProfile,
+  chooseRepeatOrderAgreementPath,
 } from '../../src/automation/order-flow';
 
 test.describe('首单步骤 5 后的协议/社保/续保分支', () => {
@@ -23,5 +24,10 @@ test.describe('首单步骤 5 后的协议/社保/续保分支', () => {
     expect(chooseRandomBrowseProfile(() => 0)).toBe('skimmer');
     expect(chooseRandomBrowseProfile(() => 0.34)).toBe('reader');
     expect(chooseRandomBrowseProfile(() => 0.99)).toBe('distracted');
+  });
+
+  test('次单步骤 2：大多数直接点击，少数浏览并勾选协议', () => {
+    expect(chooseRepeatOrderAgreementPath(() => 0.79)).toBe('direct');
+    expect(chooseRepeatOrderAgreementPath(() => 0.99)).toBe('browse-agreement');
   });
 });

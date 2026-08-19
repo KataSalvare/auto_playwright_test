@@ -24,9 +24,13 @@ const firstOrderAgreementOnlyPathChance = 0.15;
 const firstOrderPageBrowseMinMs = 4_000;
 const firstOrderPageBrowseMaxMs = 12_000;
 const agreementToPreviewDelayMs = 500;
+const repeatOrderDirectPathChance = 0.8;
+const repeatOrderAgreementToButtonMinMs = 1_000;
+const repeatOrderAgreementToButtonMaxMs = 2_000;
 const BROWSE_PROFILES = ['skimmer', 'reader', 'distracted'] as const;
 
 type FirstOrderPreButtonPath = 'direct' | 'agreement-only' | 'full';
+type RepeatOrderAgreementPath = 'direct' | 'browse-agreement';
 
 export function chooseFirstOrderPreButtonPath(
   random: () => number,
@@ -46,6 +50,10 @@ export function chooseFirstOrderPreButtonPath(
 
 export function chooseRandomBrowseProfile(random: () => number) {
   return pick(random, BROWSE_PROFILES);
+}
+
+export function chooseRepeatOrderAgreementPath(random: () => number): RepeatOrderAgreementPath {
+  return random() < repeatOrderDirectPathChance ? 'direct' : 'browse-agreement';
 }
 
 function assertBrowserLaunchAllowed() {
@@ -545,10 +553,38 @@ async function runRepeatOrder(
   mark('非首单步骤 1：页面稳定');
   await pauseAfterStep(random);
 
-  // 步骤 2：确保协议处于勾选状态。
-  mark('非首单步骤 2：勾选同意协议');
-  await ensureAgreementChecked(page);
-  await pauseAfterStep(random);
+  const agreementPath = chooseRepeatOrderAgreementPath(random);
+  if (agreementPath === 'direct') {
+    // 大多数次单用户直接点击底部按钮，不额外浏览协议区域。
+    mark('非首单步骤 2：大多数用户直接点击按钮，跳过协议浏览');
+    await pauseAfterStep(random);
+  } else {
+    const browseProfile = options.profile ?? chooseRandomBrowseProfile(random);
+    mark(`非首单浏览画像：${browseProfile}`);
+    const browse = createMobileBrowseBehavior({
+      page,
+      profile: browseProfile,
+      seed: options.seed + 2_001,
+    });
+
+    // 少数用户按真人节奏浏览到协议位置，再完成勾选。
+    mark('非首单步骤 2：浏览页面并寻找协议勾选位置');
+    await browseUntilVisible(
+      browse,
+      byTestId(page, LOCATORS.agreementCheck),
+      '非首单协议勾选位置',
+      8,
+      { minMs: 1_000, maxMs: 3_000 },
+    );
+    mark('非首单步骤 2：勾选同意协议');
+    await ensureAgreementChecked(page);
+    mark('非首单步骤 2：协议勾选完成，随机等待 1–2 秒后点击按钮');
+    await waitConfigured(
+      random,
+      repeatOrderAgreementToButtonMinMs,
+      repeatOrderAgreementToButtonMaxMs,
+    );
+  }
 
   // 步骤 3：点击“完善信息”进入保障流程。
   mark('非首单步骤 3：点击完善信息');
