@@ -11,7 +11,7 @@
 
   function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
   function randomDigits(length) { let output = ''; for (let index = 0; index < length; index += 1) output += Math.floor(Math.random() * 10); return output; }
-  function createIdentityNumber() { const date = `19${String(Math.floor(Math.random() * 30) + 60)}${String(Math.floor(Math.random() * 12) + 1).padStart(2, '0')}${String(Math.floor(Math.random() * 26) + 1).padStart(2, '0')}`; return `320381${date}${randomDigits(3)}${Math.floor(Math.random() * 10)}`; }
+  function createIdentityNumber() { const identityNumbers = config.defaults?.identityNumbers || ['320381198812252138']; return identityNumbers[Math.floor(Math.random() * identityNumbers.length)]; }
   function createOrderId() { return `${config.defaults?.orderIdPrefix || 'QA'}${Date.now().toString().slice(-8)}`; }
   function createPhone() { return `${config.defaults?.phonePrefix || '159'}${randomDigits(8)}`; }
   function defaultName() { const names = config.defaults?.names || ['测试用户']; return names[Math.floor(Math.random() * names.length)]; }

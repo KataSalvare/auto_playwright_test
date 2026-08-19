@@ -2,12 +2,24 @@
 
 项目使用 TypeScript + Playwright，业务页面统一通过 `jing-testid` 定位。
 
+先按使用场景选择入口：
+
+| 场景 | 命令 | 说明 |
+|---|---|---|
+| 单次订单流程 | `npm run automation -- --fixture=first-order` | 执行一条首单流程 |
+| 两条内置流程 | `npm run automation:fixtures` | 按顺序执行首单和非首单 |
+| 可视化快速测试 | `npm run quick-test:start` | 在浏览器页面中生成链接、设置次数并执行并发测试 |
+
+快速测试页面和命令行自动化使用同一套 `runOrderFlow` 核心流程；两者的区别只是入口和结果展示方式。
+
 ## 安装
 
 ```bash
 npm install
 npm run test:install
 ```
+
+运行成功视频裁剪还需要安装 `ffmpeg`；只做链接校验、单元测试或失败流程验证时可以暂不安装。
 
 默认使用 Playwright 的 headless shell，不会启动 macOS 的 Google Chrome 应用。
 如果从 Codex 沙箱执行订单流程，脚本会在启动浏览器前直接提示切换到普通终端，
@@ -35,11 +47,13 @@ output/videos/success/<订单号>-success-<时间戳>.mp4
 
 ```ts
 export const automationConfig = {
-  headless: false,          // false：显示浏览器，方便调试
-  deleteFailedVideo: false, // true：保留失败视频；false：删除失败视频
+  headless: true,           // true：后台运行；false：显示浏览器，方便调试
+  deleteFailedVideo: true,  // true：保留失败视频；false：删除失败视频
   outputDir: 'output/videos',
 };
 ```
+
+`deleteFailedVideo` 的名称容易反向理解：设为 `true` 时会保留失败视频并移动到 `failed` 目录，设为 `false` 时才会删除失败视频。
 
 配置中不要默认填写 `browserChannel: 'chrome'`。如果需要显式使用本机 Chrome，
 通过 `PW_CHANNEL=chrome` 覆盖，并在普通 macOS 终端中启动。
@@ -65,13 +79,19 @@ npm run automation -- --fixture=first-order --delete-failed-video=true
 
 ### 测试脚本位置
 
-单条订单测试脚本是：
+单条订单的命令行入口是：
 
 ```text
 scripts/order-flow.ts
 ```
 
-它由 `npm run automation` 调用。两个内置夹具的批量入口是：
+它由 `npm run automation` 调用；实际订单流程实现位于：
+
+```text
+src/automation/order-flow.ts
+```
+
+两个内置夹具的批量入口是：
 
 ```text
 scripts/run-fixtures.ts
@@ -109,7 +129,7 @@ PW_CHANNEL=chrome npm run automation:terminal -- --fixture=repeat-order
 
 该入口只负责切换到项目目录并调用现有 `scripts/order-flow.ts`，不会改变测试流程。
 
-使用内置测试链接：
+普通终端直接执行内置测试链接：
 
 ```bash
 npm run automation -- --fixture=first-order
@@ -212,19 +232,25 @@ npm run test:unit
 npm test
 ```
 
-默认 `npm test` 只运行 smoke 和单元测试，不会自动访问两条业务测试链接。真实业务流程需要显式执行 `npm run automation`。
+`npm run test:unit` 只运行 `tests/unit` 下的单元测试；`npm test` 运行 smoke 测试和单元测试。它们不会自动访问两条业务测试链接，也不会启动 `runOrderFlow`。真实业务流程需要显式执行 `npm run automation`。
 
 ## 快速测试页面
 
 快速测试控制台位于 [web/index.html](/Users/much/代码/仿朝发可回溯/web/index.html)，用于生成和校验业务测试链接。
 
-直接在浏览器打开 `web/index.html` 可以生成和校验链接；如需点击“开始测试”执行真实 Playwright 流程，应先启动下面的快速测试服务。浏览器限制本地文件脚本时，也可以在项目根目录启动静态服务：
+直接在浏览器打开 `web/index.html` 可以生成和校验链接，但不能通过 `file://` 页面调用“开始测试”接口。要执行真实 Playwright 流程，应启动快速测试服务：
+
+```bash
+npm run quick-test:start
+```
+
+如果只想预览页面、浏览器又限制本地文件脚本，可以在项目根目录启动静态服务：
 
 ```bash
 python3 -m http.server 4173
 ```
 
-然后访问 `http://localhost:4173/web/`。
+然后访问 `http://localhost:4173/web/`。这个静态服务只提供页面文件，不提供“开始测试”接口；不要与快速测试服务同时占用同一个端口。
 
 也可以直接使用终端入口管理服务：
 
@@ -244,15 +270,30 @@ scripts\start-quick-test.bat stop
 
 服务启动后访问 `http://localhost:4173/web/`。也可以使用 `npm run quick-test:start`、
 `npm run quick-test:restart`、`npm run quick-test:stop` 和 `npm run quick-test:status`。
-默认端口是 `4173`，需要时可追加 `--port 4200`；日志保存在 `output/quick-test-server.log`。
+默认端口是 `4173`，如需使用其他端口，命令格式为：
+
+```bash
+npm run quick-test:start -- --port 4200
+npm run quick-test:restart -- --port 4200
+```
+
+日志保存在 `output/quick-test-server.log`。
 
 自动生成规则集中在 [web/test-config.js](/Users/much/代码/仿朝发可回溯/web/test-config.js)，可以修改：
 
 - `originalUrl`：原始 URL，默认为 `https://h5-subscribe.yunxiacn.com/temp-lp-jing/index/6100b6d7fb8d64de74245697b16a5a8d`
-- `defaults`：订单号前缀、姓名池、手机号前缀、价格、`shangdan`、`outerid` 和环境标记
+- `defaults`：订单号前缀、姓名池、固定身份证号池、手机号前缀、价格、`shangdan`、`outerid` 和环境标记
 - `presets`：首单、非首单等流程预设，以及预设要附带的额外参数
 - `parameters`：页面参数字典及必填/可选标记
 
-页面不会上传业务数据；链接和测试参数仅保存在当前浏览器。当前运行记录会写入 `localStorage`，刷新页面或重新打开浏览器后仍可恢复；服务端还会将运行记录写入 `output/quick-test-runs/<runId>/run.json`，重启服务后可以继续查看已完成记录。开始新测试后会替换当前结果。点击开始测试后，控制台会调用现有的 `runOrderFlow` 自动化脚本，按并发批次执行；快速测试页面生成的成功视频独立保存在 `output/quick-test-videos/success`，由快速测试服务通过 `/quick-test-videos/...` 提供本地播放，不会与命令行 `output/videos` 混用。
+页面不会把参数上传到第三方服务，但浏览器仍会访问你填写的业务测试链接。链接和当前运行记录保存在当前浏览器的 `localStorage`；刷新或重新打开浏览器后可以恢复最近一次记录。服务端也会将运行记录写入 `output/quick-test-runs/<runId>/run.json`，重启服务后可以继续查看尚未被清理的已完成记录。开始新测试后，页面会替换当前展示的运行结果。
 
-快速测试服务还提供全局先进先出并发队列：默认最多同时运行 4 个自动化任务，超出的任务会排队等待；可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整，取值范围为 1–10，例如 `QUICK_TEST_MAX_CONCURRENCY=6 npm run quick-test:start`。服务会自动限制错误输出大小，并定期清理超过 1 小时或超过 50 条的已完成运行记录及其视频文件。
+点击开始测试后，控制台会调用现有的 `runOrderFlow` 自动化脚本。单个运行可以设置 1–10 路并发，但服务还会设置全局并发上限：默认最多同时运行 4 个自动化任务，超出的任务进入先进先出队列。可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整全局上限，取值范围为 1–10，例如：
+
+```bash
+QUICK_TEST_MAX_CONCURRENCY=6 npm run quick-test:start
+```
+
+快速测试页面生成的成功视频独立保存在 `output/quick-test-videos/success`，由快速测试服务通过 `/quick-test-videos/...` 提供本地播放，不会与命令行的 `output/videos` 混用。服务会自动限制错误输出，并清理超过 1 小时或超过 50 条的已完成运行记录及其视频文件。
+
+`web/test-config.js` 中的姓名、身份证号和手机号前缀会直接用于生成测试链接；请只填入获准使用的测试数据，不要提交真实个人信息。

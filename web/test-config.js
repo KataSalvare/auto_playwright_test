@@ -10,7 +10,14 @@ window.TEST_CONFIG = {
   originalUrl: 'https://h5-subscribe.yunxiacn.com/temp-lp-jing/index/6100b6d7fb8d64de74245697b16a5a8d',
   defaults: {
     orderIdPrefix: 'QA',
-    names: ['卡塔', '李明', '陈雨', '周宁'],
+    names: ['张三四', '李明在', '陈雨', '周宁'],
+    identityNumbers: [
+      '320381198812252138',
+      '341226198209165210',
+      '350526198711203013',
+      '350783199003058516',
+      '350783199109241511',
+    ],
     phonePrefix: '159',
     socialSecurity: '1',
     autoRenewal: '1',
