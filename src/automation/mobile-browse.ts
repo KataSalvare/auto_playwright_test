@@ -51,6 +51,16 @@ export async function isLocatorInViewport(locator: Locator): Promise<boolean> {
     && box.y + box.height > 0;
 }
 
+/** 判断页面滚动位置是否已经到达底部。 */
+export async function isPageAtBottom(page: Page, threshold = 8): Promise<boolean> {
+  return page.evaluate((bottomThreshold) => {
+    const documentElement = document.documentElement;
+    const bodyHeight = document.body?.scrollHeight ?? 0;
+    const documentHeight = Math.max(documentElement.scrollHeight, bodyHeight);
+    return window.scrollY + window.innerHeight >= documentHeight - bottomThreshold;
+  }, threshold);
+}
+
 export function createMobileBrowseBehavior({
   page,
   profile = 'reader',
@@ -142,5 +152,16 @@ export function createMobileBrowseBehavior({
     throw new Error(`经过 ${maxSwipes} 次滑动后目标仍不可见`);
   }
 
-  return Object.freeze({ pause, scroll, scrollUntilVisible });
+  async function scrollToBottom({ maxSwipes = 12, pauseAtBottom = true } = {}) {
+    for (let swipe = 0; swipe <= maxSwipes; swipe += 1) {
+      if (await isPageAtBottom(page)) {
+        if (pauseAtBottom) await pause();
+        return { swipes: swipe };
+      }
+      if (swipe < maxSwipes) await scroll({ allowBacktrack: false });
+    }
+    throw new Error(`经过 ${maxSwipes} 次浏览后页面仍未到达底部`);
+  }
+
+  return Object.freeze({ pause, scroll, scrollUntilVisible, scrollToBottom });
 }

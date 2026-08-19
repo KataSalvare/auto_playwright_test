@@ -23,6 +23,7 @@ const firstOrderDirectPathChance = 0.8;
 const firstOrderAgreementOnlyPathChance = 0.15;
 const firstOrderPageBrowseMinMs = 4_000;
 const firstOrderPageBrowseMaxMs = 12_000;
+const agreementToPreviewDelayMs = 500;
 const BROWSE_PROFILES = ['skimmer', 'reader', 'distracted'] as const;
 
 type FirstOrderPreButtonPath = 'direct' | 'agreement-only' | 'full';
@@ -111,10 +112,15 @@ async function clickTestId(
   const targetLocator = byTestId(page, testId);
   await waitForAnyVisible(targetLocator, 10_000, step);
   const targets = await visibleLocators(targetLocator);
+  const inViewportTargets: Locator[] = [];
+  for (const target of targets) {
+    if (await isLocatorInViewport(target)) inViewportTargets.push(target);
+  }
+  const clickTargets = inViewportTargets.length > 0 ? inViewportTargets : targets;
   let lastError: unknown;
 
-  // 页面可能同时保留底层按钮和蒙层内按钮，优先尝试后渲染的按钮。
-  for (const target of [...targets].reverse()) {
+  // 页面可能同时保留多个同名节点；优先点击当前视口内、后渲染的节点，避免自动滚动到远处的 DOM 节点。
+  for (const target of [...clickTargets].reverse()) {
     try {
       await target.click({ timeout: 5_000 });
       return;
@@ -126,7 +132,7 @@ async function clickTestId(
   // 阅读等待期间的蒙层不应让按钮点击失败；全部普通点击失败后再走 force。
   if (await readingOverlayIsVisible(page, options.overlayClose)) {
     mark(`${step}：蒙层仍在显示，继续触发按钮点击`);
-    for (const target of [...targets].reverse()) {
+    for (const target of [...clickTargets].reverse()) {
       try {
         await target.click({ timeout: 5_000, force: true });
         return;
@@ -251,19 +257,44 @@ async function browseUntilVisible(
   browse: HumanBrowseBehavior,
   locator: Locator,
   step: string,
-  browseSession?: { deadline: number },
   maxSwipes = 8,
+  initialVisiblePause?: { minMs: number; maxMs: number } | null,
 ) {
   for (let swipe = 0; swipe <= maxSwipes; swipe += 1) {
     if (await hasInViewport(locator)) {
       mark(`${step}：浏览到目标位置`);
-      await browse.pause();
+      const pauseRange = swipe === 0 ? initialVisiblePause : undefined;
+      const pause = pauseRange === null ? undefined : await browse.pause(pauseRange);
+      if (swipe === 0 && pauseRange && pause) {
+        mark(`${step}：目标已在视口，短暂停留 ${Math.round(pause.duration / 100) / 10} 秒`);
+      }
       return;
     }
     if (swipe < maxSwipes) await browse.scroll();
   }
 
   throw new Error(`经过 ${maxSwipes} 次浏览后${step}仍不可见`);
+}
+
+/** 步骤 7、8 点击前先滚到页面底部，并确认底部悬浮按钮已经展示。 */
+async function ensureBottomFloatingButtonVisible(
+  page: Page,
+  browse: HumanBrowseBehavior,
+  step: string,
+  options: { pauseAtBottom?: boolean } = {},
+) {
+  await browse.scrollToBottom(options);
+  const buttonLocator = byTestId(page, LOCATORS.mainButton);
+  // 页面已经确认到达底部；这里仅确认按钮可见，不调用 boundingBox 或 scrollIntoViewIfNeeded，避免悬浮节点误判或页面跳动。
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const visibleButtons = await visibleLocators(buttonLocator);
+    if (visibleButtons.length > 0) {
+      mark(`${step}：已滚动到底部，底部悬浮按钮已展示`);
+      return;
+    }
+    if (attempt < 2) await sleep(100);
+  }
+  throw new Error(`${step}：页面已到达底部，但底部悬浮按钮仍未进入视口`);
 }
 
 async function ensureAgreementChecked(page: Page) {
@@ -403,7 +434,6 @@ async function runFirstOrder(
     errorChance: options.identityErrorChance,
     missingChance: options.identityMissingChance,
   });
-  await pauseAfterStep(random);
 
   if (!hasValidIdentityChecksum(order.identityNumber)) {
     throw new Error(
@@ -420,10 +450,10 @@ async function runFirstOrder(
   if (preButtonPath === 'direct') {
     // 方案 1：社保和续保均为 1 的大多数用户直接点击按钮，跳过步骤 6–8。
     mark('首单步骤 6–8：直接点击按钮，跳过协议、社保和续保');
+    await pauseAfterStep(random);
   } else {
     const browseProfile = options.profile ?? chooseRandomBrowseProfile(random);
     mark(`首单浏览画像：${browseProfile}`);
-    const browseSession = startFirstOrderPageBrowse(random);
     const browse = createMobileBrowseBehavior({
       page,
       profile: browseProfile,
@@ -436,11 +466,16 @@ async function runFirstOrder(
       browse,
       byTestId(page, LOCATORS.agreementCheck),
       '协议勾选位置',
-      browseSession,
+      8,
+      { minMs: 1_000, maxMs: 3_000 },
     );
     mark('首单步骤 6：勾选同意协议');
     await ensureAgreementChecked(page);
-    await pauseAfterStep(random);
+    mark('首单步骤 6：协议勾选完成，等待 0.5 秒后开始预览');
+    await sleep(agreementToPreviewDelayMs);
+
+    // 协议勾选完成后，才开始步骤 7–8 的 4–12 秒整体预览预算。
+    const browseSession = startFirstOrderPageBrowse(random);
 
     if (preButtonPath === 'full') {
       // 方案 3：继续浏览，再依次选择社保和续保。
@@ -449,8 +484,8 @@ async function runFirstOrder(
         browse,
         byTestId(page, order.hasSocialSecurity ? LOCATORS.socialSecurityYes : LOCATORS.socialSecurityNo),
         '社保选项',
-        browseSession,
       );
+      await ensureBottomFloatingButtonVisible(page, browse, '首单步骤 7');
       mark('首单步骤 7：选择社保状态');
       await selectBooleanOption(
         page,
@@ -466,8 +501,10 @@ async function runFirstOrder(
         browse,
         byTestId(page, order.autoRenewal ? LOCATORS.renewalYes : LOCATORS.renewalNo),
         '续保选项',
-        browseSession,
+        8,
+        null,
       );
+      await ensureBottomFloatingButtonVisible(page, browse, '首单步骤 8', { pauseAtBottom: false });
       mark('首单步骤 8：选择续保状态');
       await selectBooleanOption(
         page,

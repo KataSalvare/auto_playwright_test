@@ -1,11 +1,16 @@
 import { test, expect } from '@playwright/test';
 import { createMobileBrowseBehavior } from '../../src/automation/mobile-browse';
 
-function createFakePage() {
+function createFakePage(atBottomAfter = Number.MAX_SAFE_INTEGER) {
   const wheelDeltas: number[] = [];
+  let bottomChecks = 0;
   return {
     page: {
       viewportSize: () => ({ width: 390, height: 844 }),
+      evaluate: async () => {
+        bottomChecks += 1;
+        return bottomChecks >= atBottomAfter;
+      },
       mouse: {
         wheel: async (_deltaX: number, deltaY: number) => wheelDeltas.push(deltaY),
       },
@@ -87,4 +92,18 @@ test('scrollUntilVisible 不把 DOM 可见误判为视口可见', async () => {
   } as never;
 
   await expect(browse.scrollUntilVisible(locator, { maxSwipes: 4 })).resolves.toEqual({ swipes: 2 });
+});
+
+test('scrollToBottom 到达页面底部后停止，并且不回滑', async () => {
+  const fake = createFakePage(3);
+  const browse = createMobileBrowseBehavior({
+    page: fake.page,
+    profile: 'reader',
+    seed: 1,
+    wait: async () => {},
+  });
+
+  await expect(browse.scrollToBottom({ maxSwipes: 4 })).resolves.toEqual({ swipes: 2 });
+  expect(fake.wheelDeltas.length).toBeGreaterThan(0);
+  expect(fake.wheelDeltas.every((delta) => delta > 0)).toBeTruthy();
 });

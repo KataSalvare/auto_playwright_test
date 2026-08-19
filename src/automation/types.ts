@@ -76,6 +76,7 @@ export interface HumanBrowseBehavior {
     backtracked: boolean;
   }>;
   scrollUntilVisible(locator: Locator, options?: { maxSwipes?: number }): Promise<{ swipes: number }>;
+  scrollToBottom(options?: { maxSwipes?: number; pauseAtBottom?: boolean }): Promise<{ swipes: number }>;
 }
 
 export interface HumanInputDependencies {
