@@ -5,6 +5,9 @@ import type { Video } from '@playwright/test';
 
 const execFileAsync = promisify(execFile);
 
+// iPhone 15 的目标录像尺寸；使用 yuv444p 保留 393 的奇数宽度。
+const IPHONE_15_VIDEO_SIZE = { width: 393, height: 852 } as const;
+
 function safeFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -46,10 +49,12 @@ export async function finalizeVideo({
       '-y',
       '-i',
       recordedPath,
+      '-vf',
+      `scale=${IPHONE_15_VIDEO_SIZE.width}:${IPHONE_15_VIDEO_SIZE.height}:flags=lanczos,format=yuv444p`,
       '-c:v',
       'libx264',
       '-pix_fmt',
-      'yuv420p',
+      'yuv444p',
       '-c:a',
       'aac',
       '-movflags',

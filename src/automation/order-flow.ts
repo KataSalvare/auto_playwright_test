@@ -12,6 +12,8 @@ import { finalizeVideo } from './video-manager';
 import type { AutomationOptions, OrderInput, RunResult } from './types';
 
 const defaultOutputDir = resolve('output/playwright/videos');
+// 自动化统一模拟 iPhone 15 的完整屏幕尺寸，不随运行环境窗口变化。
+const iPhone15Screen = { width: 393, height: 852 } as const;
 const sleep = (durationMs: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs));
 const mark = (message: string) => console.log(`· ${message}`);
 
@@ -125,9 +127,9 @@ async function runFirstOrder(
 ) {
   /*
    * 首单步骤：
-   * 1 手机号；2 点击登录；3 处理手机号弹窗；4 等待页面切换；
-   * 5 姓名；6 身份证；7 社保；8 续保；9 协议勾选；10 完善信息；
-   * 11 协议弹窗；12 产品；13 成功 Toast。
+   * 1 手机号；2 处理手机号弹窗；3 等待页面切换；4 姓名；5 身份证；
+   * 6 社保；7 续保；8 协议勾选；9 完善信息；10 协议弹窗；
+   * 11 产品；12 成功 Toast。
    */
   // 步骤 1：输入手机号。
   mark('首单步骤 1：输入手机号');
@@ -137,24 +139,20 @@ async function runFirstOrder(
     seed: options.seed,
     errorChance: options.phoneErrorChance,
   });
-  // 步骤 2：点击“点此登录”。
-  mark('首单步骤 2：点击点此登录');
-  await clickTestId(page, LOCATORS.mainButton, '点击点此登录');
-
-  // 步骤 3：如果出现手机号确认弹窗，点击“同意并继续”。
-  mark('首单步骤 3：处理手机号确认弹窗');
+  // 步骤 2：如果出现手机号确认弹窗，点击“同意并继续”。
+  mark('首单步骤 2：处理手机号确认弹窗');
   await clickIfAppears(page, LOCATORS.phoneContinue);
 
-  // 步骤 4：等待页面切换到实名信息区域。
-  mark('首单步骤 4：等待页面进入实名信息');
+  // 步骤 3：等待页面切换到实名信息区域。
+  mark('首单步骤 3：等待页面进入实名信息');
   await waitConfigured(random, 2_000, 3_000);
 
-  // 步骤 5：输入姓名。
-  mark('首单步骤 5：输入姓名');
+  // 步骤 4：输入姓名。
+  mark('首单步骤 4：输入姓名');
   await fillName({ page, value: order.name, seed: options.seed });
 
-  // 步骤 6：通过自定义身份证键盘输入身份证。
-  mark('首单步骤 6：输入身份证');
+  // 步骤 5：通过自定义身份证键盘输入身份证。
+  mark('首单步骤 5：输入身份证');
   await fillIdentity({
     page,
     value: order.identityNumber,
@@ -170,8 +168,8 @@ async function runFirstOrder(
   }
 
   const browse = createMobileBrowseBehavior({ page, profile: options.profile, seed: options.seed });
-  // 步骤 7：模拟浏览后选择社保状态。
-  mark('首单步骤 7：选择社保状态');
+  // 步骤 6：模拟浏览后选择社保状态。
+  mark('首单步骤 6：选择社保状态');
   await browse.scroll();
   await selectBooleanOption(
     page,
@@ -181,8 +179,8 @@ async function runFirstOrder(
     '选择社保状态',
   );
 
-  // 步骤 8：选择是否自动续保。
-  mark('首单步骤 8：选择续保状态');
+  // 步骤 7：选择是否自动续保。
+  mark('首单步骤 7：选择续保状态');
   await selectBooleanOption(
     page,
     order.autoRenewal,
@@ -191,16 +189,16 @@ async function runFirstOrder(
     '选择续保状态',
   );
 
-  // 步骤 9：勾选协议。
-  mark('首单步骤 9：勾选同意协议');
+  // 步骤 8：勾选协议。
+  mark('首单步骤 8：勾选同意协议');
   await ensureAgreementChecked(page);
 
-  // 步骤 10：点击“点此登录/完善信息”进入保障流程。
-  mark('首单步骤 10：点击完善信息');
+  // 步骤 9：点击“点此登录/完善信息”进入保障流程。
+  mark('首单步骤 9：点击完善信息');
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
 
-  // 步骤 11、12：处理协议弹窗并选择产品。
-  await runAgreementAndProductFlow(page, options, random, '首单', 11, 12);
+  // 步骤 10、11：处理协议弹窗并选择产品。
+  await runAgreementAndProductFlow(page, options, random, '首单', 10, 11);
   await browse.pause({ minMs: 500, maxMs: 2_000 });
 }
 
@@ -244,13 +242,15 @@ export async function runOrderFlow(
     channel: process.env.PW_CHANNEL || options.browserChannel,
   });
   const context = await browser.newContext({
-    ...devices['iPhone 13'],
+    ...devices['iPhone 15'],
+    viewport: iPhone15Screen,
+    screen: iPhone15Screen,
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     colorScheme: 'light',
     recordVideo: {
       dir: pendingDir,
-      size: { width: 390, height: 844 },
+      size: iPhone15Screen,
     },
   });
   const page = await context.newPage();
@@ -266,7 +266,7 @@ export async function runOrderFlow(
     else await runRepeatOrder(page, options, random);
 
     const flowLabel = order.pageOrder === 1 ? '首单' : '非首单';
-    const successStep = order.pageOrder === 1 ? 13 : 6;
+    const successStep = order.pageOrder === 1 ? 12 : 6;
     // 最后一步：success Toast 是订单流程的唯一成功判定。
     mark(`${flowLabel}步骤 ${successStep}：等待成功 Toast`);
     await waitForAnyVisible(getSuccessToast(page), 30_000, '成功 Toast');
