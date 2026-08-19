@@ -68,19 +68,35 @@ export async function startScreenRecorder({
 
   let stopped = false;
   let captureError: unknown;
+  let writtenFrames = 0;
+  const recordingStartedAt = Date.now();
+
+  async function writeFrame(frame: Buffer) {
+    if (!ffmpeg.stdin.write(frame)) await once(ffmpeg.stdin, 'drain');
+  }
+
   const captureLoop = (async () => {
     while (!stopped) {
-      const startedAt = Date.now();
       try {
         // 必须允许 CSS transition/animation，否则自定义键盘的点击反馈会被截图关闭。
         const frame = await page.screenshot({ animations: 'allow' });
-        if (!ffmpeg.stdin.write(frame)) await once(ffmpeg.stdin, 'drain');
+
+        // 截图耗时可能超过一个帧间隔；补写当前画面，避免按固定 fps 播放时视频加速。
+        const elapsedFrames = Math.max(
+          writtenFrames + 1,
+          Math.floor((Date.now() - recordingStartedAt) / FRAME_INTERVAL_MS) + 1,
+        );
+        while (writtenFrames < elapsedFrames) {
+          await writeFrame(frame);
+          writtenFrames += 1;
+        }
       } catch (error) {
         if (!stopped) captureError = error;
         break;
       }
 
-      await sleep(Math.max(0, FRAME_INTERVAL_MS - (Date.now() - startedAt)));
+      const nextFrameAt = recordingStartedAt + writtenFrames * FRAME_INTERVAL_MS;
+      await sleep(Math.max(0, nextFrameAt - Date.now()));
     }
   })();
 

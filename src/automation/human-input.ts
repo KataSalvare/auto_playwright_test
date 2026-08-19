@@ -27,6 +27,7 @@ const MATURE_USER_TIMING = Object.freeze({
   deleteMinMs: 120,
   deleteMaxMs: 300,
 });
+const KEYBOARD_PRESS_HOLD_MS = 90;
 
 export interface HumanInputOptions {
   page: Page;
@@ -59,6 +60,11 @@ function thinkingPause(random: () => number): number {
     MATURE_USER_TIMING.thinkingPauseMinMs,
     MATURE_USER_TIMING.thinkingPauseMaxMs,
   );
+}
+
+async function clickKeyboardKey(page: Page, key: KeyboardKey) {
+  // 保持按下约 90ms，让键盘的 pointerdown/active 动画被录像采集到。
+  await getKeyboardKey(page, key).click({ delay: KEYBOARD_PRESS_HOLD_MS });
 }
 
 function mutateValue(value: string, random: () => number): { value: string; index: number } {
@@ -143,7 +149,7 @@ async function typeWithVirtualKeyboard(
   await byTestId(page, inputTestId).click();
 
   const typeCharacter = async (character: string) => {
-    await getKeyboardKey(page, character.toLowerCase() as KeyboardKey).click();
+    await clickKeyboardKey(page, character.toLowerCase() as KeyboardKey);
     await wait(pauseRange(random));
   };
 
@@ -221,7 +227,7 @@ async function typeIdentityWithKeyboard(
 
 async function deleteIdentityCharacters(page: Page, count: number, random: () => number, wait: WaitFn) {
   for (let index = 0; index < count; index += 1) {
-    await getKeyboardKey(page, 'del').click();
+    await clickKeyboardKey(page, 'del');
     await wait(randomInteger(
       random,
       MATURE_USER_TIMING.deleteMinMs,
@@ -242,7 +248,7 @@ async function correctIdentityWithKeyboard(
   await deleteIdentityCharacters(page, expected.length - (mode === 'partial' ? wrongIndex : 0), random, wait);
   const suffix = mode === 'partial' ? expected.slice(wrongIndex) : expected;
   for (const character of suffix) {
-    await getKeyboardKey(page, character.toLowerCase() as KeyboardKey).click();
+    await clickKeyboardKey(page, character.toLowerCase() as KeyboardKey);
     await wait(pauseRange(random));
   }
 }
@@ -280,7 +286,7 @@ export async function fillPhone({
   await deleteIdentityCharacters(page, deleteCount, random, wait);
   const suffix = mode === 'partial' ? value.slice(wrong.index) : value;
   for (const character of suffix) {
-    await getKeyboardKey(page, character as KeyboardKey).click();
+    await clickKeyboardKey(page, character as KeyboardKey);
     await wait(pauseRange(random));
   }
   await closeKeyboardIfVisible(page);
@@ -315,7 +321,7 @@ export async function fillIdentity({
   if (shouldOmit) {
     await typeIdentityWithKeyboard(page, value.slice(0, -1), random, wait);
     await wait(thinkingPause(random));
-    await getKeyboardKey(page, value.at(-1)!.toLowerCase() as KeyboardKey).click();
+    await clickKeyboardKey(page, value.at(-1)!.toLowerCase() as KeyboardKey);
     await closeKeyboardIfVisible(page);
     return { strategy: 'missing-input-corrected' as const, corrected: true };
   }
