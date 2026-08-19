@@ -313,7 +313,7 @@ npm run quick-test:restart -- --port 4200
 - `presets`：首单、非首单等流程预设，以及预设要附带的额外参数
 - `parameters`：页面参数字典及必填/可选标记
 
-页面不会把参数上传到第三方服务，但浏览器仍会访问你填写的业务测试链接。测试记录以服务端的 `output/quick-test-runs/<runId>/run.json` 为准；页面刷新或重新打开浏览器后，会通过服务端记录接口恢复最近一次测试。开始新测试后，页面会替换当前展示的运行结果。
+页面不会把参数上传到第三方服务，但浏览器仍会访问你填写的业务测试链接。测试记录以服务端的 `output/quick-test-runs/<runId>/run.json` 为准；页面刷新或重新打开浏览器后，会通过服务端记录接口恢复全部历史测试。历史记录会一直保留，直到用户删除对应记录。
 
 点击开始测试后，控制台会调用现有的 `runOrderFlow` 自动化脚本。单个运行可以设置 1–10 路并发，但服务还会设置全局并发上限：默认最多同时运行 4 个自动化任务，超出的任务进入先进先出队列。可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整全局上限，取值范围为 1–10，例如：
 
@@ -321,6 +321,6 @@ npm run quick-test:restart -- --port 4200
 QUICK_TEST_MAX_CONCURRENCY=6 npm run quick-test:start
 ```
 
-快速测试页面生成的成功视频独立保存在 `output/quick-test-videos/success`，由快速测试服务通过 `/quick-test-videos/...` 提供本地播放，不会与命令行的 `output/videos` 混用。服务会自动限制错误输出，并清理超过 1 小时或超过 50 条的已完成运行记录及其视频文件。
+快速测试页面生成的成功视频独立保存在 `output/quick-test-videos/success`，由快速测试服务通过 `/quick-test-videos/...` 提供本地播放，不会与命令行的 `output/videos` 混用。服务会限制错误输出；删除测试记录时会同步删除对应视频。
 
 `web/test-config.js` 中的姓名、身份证号和手机号前缀会直接用于生成测试链接；请只填入获准使用的测试数据，不要提交真实个人信息。

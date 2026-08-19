@@ -13,7 +13,7 @@
  */
 import { createServer, request as httpRequest } from 'node:http';
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -32,8 +32,6 @@ const DEFAULT_PORT = 4173;
 const DEFAULT_HOST = '127.0.0.1';
 const MAX_CONCURRENT_AUTOMATIONS = Math.min(10, Math.max(1, Number.parseInt(process.env.QUICK_TEST_MAX_CONCURRENCY || '4', 10) || 4));
 const MAX_ERROR_OUTPUT_LENGTH = 64 * 1024;
-const COMPLETED_RUN_TTL_MS = 60 * 60 * 1000;
-const MAX_RETAINED_COMPLETED_RUNS = 50;
 const QUICK_TEST_RUNS = new Map();
 const AUTOMATION_QUEUE = [];
 const ACTIVE_CHILDREN = new Set();
@@ -312,7 +310,6 @@ async function executeQuickTestRun(run) {
     run.status = 'completed';
     run.completedAt = Date.now();
     persistRun(run);
-    cleanupCompletedRuns();
   }
 }
 
@@ -322,27 +319,6 @@ function removeVideo(videoPath) {
   const relativePath = relative(QUICK_TEST_VIDEO_ROOT, absolutePath);
   if (!relativePath || relativePath.startsWith('..')) throw new Error('视频路径不在允许的输出目录内');
   if (existsSync(absolutePath)) unlinkSync(absolutePath);
-}
-
-async function removeRunArtifacts(run) {
-  for (const result of run.results) {
-    try { removeVideo(result.videoPath); } catch (error) { console.error(`快速测试视频清理失败：${error.message || error}`); }
-  }
-  await rm(resolve(QUICK_RUN_ROOT, run.runId), { recursive: true, force: true });
-}
-
-function cleanupCompletedRuns() {
-  const completedRuns = [...QUICK_TEST_RUNS.values()]
-    .filter((run) => run.status === 'completed')
-    .sort((left, right) => (left.completedAt || 0) - (right.completedAt || 0));
-  const cutoff = Date.now() - COMPLETED_RUN_TTL_MS;
-  const expired = completedRuns.filter((run) => (run.completedAt || 0) <= cutoff);
-  const overflow = completedRuns.slice(0, Math.max(0, completedRuns.length - MAX_RETAINED_COMPLETED_RUNS));
-  const toRemove = new Set([...expired, ...overflow]);
-  for (const run of toRemove) {
-    if (!QUICK_TEST_RUNS.delete(run.runId)) continue;
-    void removeRunArtifacts(run).catch((error) => console.error(`快速测试运行目录清理失败：${error.message || error}`));
-  }
 }
 
 async function createQuickTest(request, response) {
@@ -393,12 +369,12 @@ async function updateQuickTestResult(request, response, runId, indexText) {
 }
 
 async function handleQuickTestApi(request, response) {
-  cleanupCompletedRuns();
   const pathname = new URL(request.url || '/', 'http://quick-test.local').pathname;
   if (pathname === '/api/quick-test/runs' && request.method === 'GET') {
     const runs = [...QUICK_TEST_RUNS.values()]
       .sort((left, right) => (right.startedAt || 0) - (left.startedAt || 0))
-      .map(publicRun);
+      .map(publicRun)
+      .filter((run) => run.results.length > 0 || !run.done);
     sendJson(response, 200, { runs });
     return;
   }
@@ -436,7 +412,6 @@ function serveVideo(filePath, request, response) {
 function serveCommand(options) {
   if (!existsSync(WEB_ROOT)) throw new Error(`找不到前端目录：${WEB_ROOT}`);
   loadPersistedRuns();
-  cleanupCompletedRuns();
   const server = createServer((request, response) => {
     if ((request.url || '').split('?')[0] === '/api/quick-test/health') { sendJson(response, 200, { service: 'quick-test-server', pid: process.pid, port: options.port }); return; }
     if ((request.url || '').split('?')[0].startsWith('/api/quick-test/run')) { handleQuickTestApi(request, response).catch((error) => sendJson(response, 500, { error: error.message || '自动化测试执行失败' })); return; }
