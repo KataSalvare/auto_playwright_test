@@ -101,14 +101,19 @@ async function runAgreementAndProductFlow(
   page: Page,
   options: AutomationOptions,
   random: () => number,
+  flowLabel: string,
+  agreementStep: number,
+  productStep: number,
 ) {
   // 协议或产品弹窗被关闭，表示本次订单流程失败。
   await failIfClosed(page, LOCATORS.agreementClose, '强制阅读协议');
   if (options.waitAgreement) await waitConfigured(random, 2_000, 2_000);
+  mark(`${flowLabel}步骤 ${agreementStep}：点击强制阅读协议弹窗同意并继续`);
   await clickTestId(page, LOCATORS.agreementContinue, '协议同意并继续');
 
   await failIfClosed(page, LOCATORS.productClose, '选择产品');
   if (options.waitProduct) await waitConfigured(random, 2_000, 2_000);
+  mark(`${flowLabel}步骤 ${productStep}：选择${options.product === 'basic' ? '基础版' : '升级版'}产品`);
   await selectProduct(page, options.product);
 }
 
@@ -118,21 +123,38 @@ async function runFirstOrder(
   options: AutomationOptions,
   random: () => number,
 ) {
-  // 首单：手机号登录后补充实名信息，页面自动进入保障选择步骤。
-  mark('首单：输入手机号');
+  /*
+   * 首单步骤：
+   * 1 手机号；2 点击登录；3 处理手机号弹窗；4 等待页面切换；
+   * 5 姓名；6 身份证；7 社保；8 续保；9 协议勾选；10 完善信息；
+   * 11 协议弹窗；12 产品；13 成功 Toast。
+   */
+  // 步骤 1：输入手机号。
+  mark('首单步骤 1：输入手机号');
   await fillPhone({
     page,
     value: order.phone,
     seed: options.seed,
     errorChance: options.phoneErrorChance,
   });
-  mark('首单：点击登录并处理手机号弹窗');
+  // 步骤 2：点击“点此登录”。
+  mark('首单步骤 2：点击点此登录');
   await clickTestId(page, LOCATORS.mainButton, '点击点此登录');
+
+  // 步骤 3：如果出现手机号确认弹窗，点击“同意并继续”。
+  mark('首单步骤 3：处理手机号确认弹窗');
   await clickIfAppears(page, LOCATORS.phoneContinue);
+
+  // 步骤 4：等待页面切换到实名信息区域。
+  mark('首单步骤 4：等待页面进入实名信息');
   await waitConfigured(random, 2_000, 3_000);
 
-  mark('首单：输入姓名和身份证');
+  // 步骤 5：输入姓名。
+  mark('首单步骤 5：输入姓名');
   await fillName({ page, value: order.name, seed: options.seed });
+
+  // 步骤 6：通过自定义身份证键盘输入身份证。
+  mark('首单步骤 6：输入身份证');
   await fillIdentity({
     page,
     value: order.identityNumber,
@@ -148,7 +170,8 @@ async function runFirstOrder(
   }
 
   const browse = createMobileBrowseBehavior({ page, profile: options.profile, seed: options.seed });
-  mark('首单：模拟浏览并选择社保、续保');
+  // 步骤 7：模拟浏览后选择社保状态。
+  mark('首单步骤 7：选择社保状态');
   await browse.scroll();
   await selectBooleanOption(
     page,
@@ -157,6 +180,9 @@ async function runFirstOrder(
     LOCATORS.socialSecurityNo,
     '选择社保状态',
   );
+
+  // 步骤 8：选择是否自动续保。
+  mark('首单步骤 8：选择续保状态');
   await selectBooleanOption(
     page,
     order.autoRenewal,
@@ -165,11 +191,16 @@ async function runFirstOrder(
     '选择续保状态',
   );
 
-  mark('首单：勾选协议并进入投保流程');
+  // 步骤 9：勾选协议。
+  mark('首单步骤 9：勾选同意协议');
   await ensureAgreementChecked(page);
+
+  // 步骤 10：点击“点此登录/完善信息”进入保障流程。
+  mark('首单步骤 10：点击完善信息');
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
-  mark('首单：处理协议和产品弹窗');
-  await runAgreementAndProductFlow(page, options, random);
+
+  // 步骤 11、12：处理协议弹窗并选择产品。
+  await runAgreementAndProductFlow(page, options, random, '首单', 11, 12);
   await browse.pause({ minMs: 500, maxMs: 2_000 });
 }
 
@@ -178,14 +209,22 @@ async function runRepeatOrder(
   options: AutomationOptions,
   random: () => number,
 ) {
-  // 非首单已经有实名信息，只需完成协议和产品选择。
+  /* 非首单步骤：1 等待页面；2 勾选协议；3 完善信息；4 协议弹窗；5 产品；6 成功 Toast。 */
   const browse = createMobileBrowseBehavior({ page, profile: options.profile, seed: options.seed });
-  mark('非首单：等待并进入投保流程');
+  // 步骤 1：等待 2–3 秒，让页面和已有实名信息稳定。
+  mark('非首单步骤 1：等待页面稳定');
   await browse.pause({ minMs: 2_000, maxMs: 3_000 });
+
+  // 步骤 2：确保协议处于勾选状态。
+  mark('非首单步骤 2：勾选同意协议');
   await ensureAgreementChecked(page);
+
+  // 步骤 3：点击“完善信息”进入保障流程。
+  mark('非首单步骤 3：点击完善信息');
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
-  mark('非首单：处理协议和产品弹窗');
-  await runAgreementAndProductFlow(page, options, random);
+
+  // 步骤 4、5：处理协议弹窗并选择产品。
+  await runAgreementAndProductFlow(page, options, random, '非首单', 4, 5);
   await browse.pause({ minMs: 500, maxMs: 2_000 });
 }
 
@@ -226,10 +265,13 @@ export async function runOrderFlow(
     if (order.pageOrder === 1) await runFirstOrder(page, order, options, random);
     else await runRepeatOrder(page, options, random);
 
-    mark('等待成功 Toast');
+    const flowLabel = order.pageOrder === 1 ? '首单' : '非首单';
+    const successStep = order.pageOrder === 1 ? 13 : 6;
+    // 最后一步：success Toast 是订单流程的唯一成功判定。
+    mark(`${flowLabel}步骤 ${successStep}：等待成功 Toast`);
     await waitForAnyVisible(getSuccessToast(page), 30_000, '成功 Toast');
     success = true;
-    mark('检测到成功 Toast，等待录像完整记录');
+    mark(`${flowLabel}步骤 ${successStep}：检测到成功 Toast，等待录像完整记录`);
     await waitConfigured(random, 800, 1_200);
   } catch (error) {
     failure = error;
