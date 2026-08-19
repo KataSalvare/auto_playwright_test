@@ -84,6 +84,24 @@ npm run automation -- --fixture=repeat-order
 npm run automation:fixtures
 ```
 
+### 使用普通终端启动 Chrome
+
+Chrome 不要从 Codex 沙箱终端启动，请在 macOS 的 Terminal.app 或 iTerm2 中执行：
+
+```bash
+cd "/Users/much/代码/仿朝发可回溯"
+npm run automation:terminal -- --fixture=first-order
+npm run automation:terminal -- --fixture=repeat-order
+```
+
+也可以直接双击，或在普通终端执行：
+
+```bash
+./scripts/run-automation-terminal.command --fixture=first-order
+```
+
+该入口只负责切换到项目目录并调用现有 `scripts/order-flow.ts`，不会改变测试流程。
+
 使用内置测试链接：
 
 ```bash

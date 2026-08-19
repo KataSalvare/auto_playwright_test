@@ -14,6 +14,7 @@
     "automation": "tsx scripts/order-flow.ts",
     "automation:headed": "tsx scripts/order-flow.ts --headed",
     "automation:help": "tsx scripts/order-flow.ts --help",
+    "automation:terminal": "zsh scripts/run-automation-terminal.command",
     "automation:fixtures": "tsx scripts/run-fixtures.ts",
     "typecheck": "tsc --noEmit"
   },
