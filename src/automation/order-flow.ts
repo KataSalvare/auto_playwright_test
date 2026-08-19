@@ -160,13 +160,51 @@ async function clickTestId(
   throw lastError;
 }
 
-async function clickIfAppears(page: Page, testId: LocatorTestId, timeoutMs = 5_000) {
+async function waitForPhoneConfirmationHandled(page: Page, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  const continueLocator = byTestId(page, LOCATORS.phoneContinue);
+  const nameInputLocator = byTestId(page, LOCATORS.nameInput);
+
+  while (Date.now() < deadline) {
+    // 点击完成后，弹窗应消失；如果页面已经切换到姓名输入，也视为处理成功。
+    if (!(await hasVisible(continueLocator)) || await hasVisible(nameInputLocator)) return;
+    await sleep(100);
+  }
+
+  throw new Error('手机号确认弹窗点击后仍未关闭');
+}
+
+/**
+ * 可选弹窗点击：弹窗没有出现时继续；弹窗一旦出现，点击失败必须重试并报错。
+ * 手机号确认弹窗出现时通常伴随键盘收起动画，因此不能只做一次普通 click。
+ */
+async function clickIfAppears(page: Page, testId: LocatorTestId, timeoutMs = 10_000) {
   try {
-    const target = await waitForAnyVisible(byTestId(page, testId), timeoutMs, testId);
-    await target.click({ timeout: 5_000 });
+    await waitForAnyVisible(byTestId(page, testId), timeoutMs, testId);
   } catch {
     // 某些测试环境不会出现手机号确认弹窗，此时按页面当前状态继续。
+    return;
   }
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      // 复用统一点击逻辑：处理多个同名节点、视口、蒙层和 force fallback。
+      await clickTestId(page, testId, '手机号确认弹窗同意并继续');
+      await waitForPhoneConfirmationHandled(page);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        mark(`手机号确认弹窗点击第 ${attempt} 次未完成，准备重试`);
+        await sleep(300);
+      }
+    }
+  }
+
+  throw new Error(
+    `手机号确认弹窗点击失败（已重试 3 次）：${lastError instanceof Error ? lastError.message : String(lastError)}`,
+  );
 }
 
 async function waitForAnyVisible(locator: Locator, timeoutMs: number, step = '目标元素'): Promise<Locator> {
