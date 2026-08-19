@@ -1,13 +1,31 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { expect, test } from '@playwright/test';
 import { finalizeVideo } from '../../src/automation/video-manager';
+
+const execFileAsync = promisify(execFile);
 
 async function temporaryVideo() {
   const directory = await mkdtemp(join(tmpdir(), 'order-video-'));
   const path = join(directory, 'recording.mp4');
-  await writeFile(path, 'temporary video');
+  await execFileAsync('ffmpeg', [
+    '-y',
+    '-loglevel',
+    'error',
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=black:s=2x2:r=30:d=0.5',
+    '-an',
+    '-c:v',
+    'libx264',
+    '-pix_fmt',
+    'yuv420p',
+    path,
+  ]);
   return { directory, path };
 }
 
@@ -57,6 +75,7 @@ test.describe('失败视频配置', () => {
         orderId: 'order/1',
         outputDir: join(temporary.directory, 'output'),
         deleteFailedVideo: false,
+        trimDurationMs: 300,
       });
 
       expect(result).toMatch(/\/success\/order_1-success-\d+\.mp4$/);

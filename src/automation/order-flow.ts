@@ -7,13 +7,12 @@ import { hasValidIdentityChecksum } from './identity';
 import { byTestId, getSuccessToast, LOCATORS } from './locators';
 import type { LocatorTestId } from './locators';
 import { createSeededRandom, randomBetween } from './random';
-import { startScreenRecorder } from './screen-recorder';
 import { finalizeVideo } from './video-manager';
 import type { AutomationOptions, OrderInput, RunResult } from './types';
 
 const defaultOutputDir = resolve('output/videos');
 // 自动化统一模拟 iPhone 15 的完整屏幕尺寸，不随运行环境窗口变化。
-const iPhone15Screen = { width: 393, height: 852 } as const;
+const iPhone15Screen = { width: 392, height: 852 } as const;
 const sleep = (durationMs: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs));
 const mark = (message: string) => console.log(`· ${message}`);
 
@@ -106,7 +105,7 @@ async function runAgreementAndProductFlow(
   flowLabel: string,
   agreementStep: number,
   productStep: number,
-  stopRecording: () => Promise<void>,
+  markRecordingCutoff: () => void,
 ) {
   // 协议或产品弹窗被关闭，表示本次订单流程失败。
   await failIfClosed(page, LOCATORS.agreementClose, '强制阅读协议');
@@ -127,10 +126,11 @@ async function runAgreementAndProductFlow(
   mark(`${flowLabel}步骤 ${productStep}：选择${options.product === 'basic' ? '基础版' : '升级版'}产品`);
   await selectProduct(page, options.product);
 
-  // 产品选择完成后只再录制 2–3 秒；停止的是帧录像器，页面仍继续监控 success。
-  mark(`${flowLabel}步骤 ${productStep}：等待 2–3 秒后停止录像`);
+  // 原生 Video 不能在页面继续运行时单独停止，因此记录裁剪点，页面继续监控 success。
+  mark(`${flowLabel}步骤 ${productStep}：等待 2–3 秒并记录裁剪点`);
   await waitConfigured(random, 2_000, 3_000);
-  await stopRecording();
+  mark(`${flowLabel}步骤 ${productStep}：记录视频裁剪点`);
+  markRecordingCutoff();
 }
 
 async function runFirstOrder(
@@ -138,7 +138,7 @@ async function runFirstOrder(
   order: OrderInput,
   options: AutomationOptions,
   random: () => number,
-  stopRecording: () => Promise<void>,
+  markRecordingCutoff: () => void,
 ) {
   /*
    * 首单步骤：
@@ -163,7 +163,7 @@ async function runFirstOrder(
 
   // 步骤 3：等待页面切换到实名信息区域。
   mark('首单步骤 3：等待页面进入实名信息');
-  await waitConfigured(random, 2_000, 5_000);
+  await waitConfigured(random, 3_000, 5_000);
 
   // 步骤 4：输入姓名。
   mark('首单步骤 4：输入姓名');
@@ -214,19 +214,19 @@ async function runFirstOrder(
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
 
   // 步骤 10、11：处理协议弹窗并选择产品。
-  await runAgreementAndProductFlow(page, options, random, '首单', 10, 11, stopRecording);
+  await runAgreementAndProductFlow(page, options, random, '首单', 10, 11, markRecordingCutoff);
 }
 
 async function runRepeatOrder(
   page: Page,
   options: AutomationOptions,
   random: () => number,
-  stopRecording: () => Promise<void>,
+  markRecordingCutoff: () => void,
 ) {
   /* 非首单步骤：1 等待页面；2 勾选协议；3 完善信息；4 协议弹窗；5 产品；6 成功 Toast。 */
   // 步骤 1 前：页面打开后先随机等待，暂不执行滚动等浏览操作。
-  mark('非首单步骤 1 前：随机等待 2–5 秒');
-  await waitConfigured(random, 2_000, 5_000);
+  mark('非首单步骤 1 前：随机等待 5–8 秒');
+  await waitConfigured(random, 5_000, 8_000);
   // 步骤 1：页面稳定后继续处理已有实名信息。
   mark('非首单步骤 1：页面稳定');
 
@@ -239,14 +239,14 @@ async function runRepeatOrder(
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
 
   // 步骤 4、5：处理协议弹窗并选择产品。
-  await runAgreementAndProductFlow(page, options, random, '非首单', 4, 5, stopRecording);
+  await runAgreementAndProductFlow(page, options, random, '非首单', 4, 5, markRecordingCutoff);
 }
 
 export async function runOrderFlow(
   order: OrderInput,
   options: AutomationOptions,
 ): Promise<RunResult> {
-  // 每个订单使用独立浏览器上下文；录像停止后页面仍保留到 success 监控结束。
+  // 每个订单使用独立浏览器上下文；原生录像在 context 关闭时完成写入。
   const outputDir = options.outputDir || defaultOutputDir;
   const pendingDir = resolve(outputDir, '.pending');
   await mkdir(pendingDir, { recursive: true });
@@ -261,19 +261,21 @@ export async function runOrderFlow(
     ...devices['iPhone 15'],
     viewport: iPhone15Screen,
     screen: iPhone15Screen,
+    recordVideo: {
+      dir: pendingDir,
+      size: iPhone15Screen,
+    },
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     colorScheme: 'light',
   });
   const page = await context.newPage();
-  const recordingPath = resolve(pendingDir, `${order.orderId}-${Date.now()}.mp4`);
-  const recorder = await startScreenRecorder({ page, outputPath: recordingPath });
+  const nativeVideo = page.video();
+  const recordingStartedAt = Date.now();
   let recordedPath: string | undefined;
-  let recordingStopped = false;
-  const stopRecording = async () => {
-    if (recordingStopped) return;
-    recordedPath = await recorder.stop();
-    recordingStopped = true;
+  let recordingCutoffAt: number | undefined;
+  const markRecordingCutoff = () => {
+    if (!recordingCutoffAt) recordingCutoffAt = Date.now();
   };
   const random = createSeededRandom(options.seed + 101);
   let success = false;
@@ -282,8 +284,8 @@ export async function runOrderFlow(
   try {
     mark(`打开页面：流程 ${order.pageOrder}`);
     await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
-    if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, stopRecording);
-    else await runRepeatOrder(page, options, random, stopRecording);
+    if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, markRecordingCutoff);
+    else await runRepeatOrder(page, options, random, markRecordingCutoff);
 
     const flowLabel = order.pageOrder === 1 ? '首单' : '非首单';
     const successStep = order.pageOrder === 1 ? 12 : 6;
@@ -296,12 +298,12 @@ export async function runOrderFlow(
     failure = error;
   } finally {
     try {
-      // 产品前失败时也要先收尾录像，再关闭页面；正常流程此处是幂等空操作。
-      await stopRecording();
+      // 原生 Video 只有在 context 关闭后才保证已写入磁盘。
+      await context.close();
+      if (nativeVideo) recordedPath = await nativeVideo.path();
     } catch (error) {
       if (!failure) failure = error;
     }
-    await context.close();
     await browser.close();
   }
 
@@ -311,6 +313,7 @@ export async function runOrderFlow(
     orderId: order.orderId,
     outputDir,
     deleteFailedVideo: options.deleteFailedVideo,
+    trimDurationMs: recordingCutoffAt ? recordingCutoffAt - recordingStartedAt : undefined,
   });
 
   if (!success) {
