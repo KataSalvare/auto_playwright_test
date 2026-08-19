@@ -4,7 +4,8 @@ import { dirname } from 'node:path';
 import { once } from 'node:events';
 import type { Page } from '@playwright/test';
 
-const FRAME_RATE = 10;
+// 20fps 提高短暂点击反馈的可见概率，同时控制截图和编码开销。
+const FRAME_RATE = 20;
 const FRAME_INTERVAL_MS = 1_000 / FRAME_RATE;
 const VIDEO_SIZE = { width: 393, height: 852 } as const;
 
@@ -71,7 +72,8 @@ export async function startScreenRecorder({
     while (!stopped) {
       const startedAt = Date.now();
       try {
-        const frame = await page.screenshot({ animations: 'disabled' });
+        // 必须允许 CSS transition/animation，否则自定义键盘的点击反馈会被截图关闭。
+        const frame = await page.screenshot({ animations: 'allow' });
         if (!ffmpeg.stdin.write(frame)) await once(ffmpeg.stdin, 'drain');
       } catch (error) {
         if (!stopped) captureError = error;
