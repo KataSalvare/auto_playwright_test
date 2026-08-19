@@ -16,6 +16,18 @@ const INPUT_STRATEGIES = Object.freeze([
 
 export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
 
+// 按 40–70 岁用户的操作节奏模拟：单个字符更慢，分段输入时增加思考停顿。
+const MATURE_USER_TIMING = Object.freeze({
+  characterMinMs: 180,
+  characterMaxMs: 420,
+  shortPauseMinMs: 320,
+  shortPauseMaxMs: 820,
+  thinkingPauseMinMs: 650,
+  thinkingPauseMaxMs: 1_400,
+  deleteMinMs: 120,
+  deleteMaxMs: 300,
+});
+
 export interface HumanInputOptions {
   page: Page;
   seed: number;
@@ -26,7 +38,27 @@ export interface HumanInputOptions {
 }
 
 function pauseRange(random: () => number): number {
-  return randomInteger(random, 35, 115);
+  return randomInteger(
+    random,
+    MATURE_USER_TIMING.characterMinMs,
+    MATURE_USER_TIMING.characterMaxMs,
+  );
+}
+
+function shortPause(random: () => number): number {
+  return randomInteger(
+    random,
+    MATURE_USER_TIMING.shortPauseMinMs,
+    MATURE_USER_TIMING.shortPauseMaxMs,
+  );
+}
+
+function thinkingPause(random: () => number): number {
+  return randomInteger(
+    random,
+    MATURE_USER_TIMING.thinkingPauseMinMs,
+    MATURE_USER_TIMING.thinkingPauseMaxMs,
+  );
 }
 
 function mutateValue(value: string, random: () => number): { value: string; index: number } {
@@ -48,7 +80,7 @@ async function pressSequentially(locator: Locator, value: string, strategy: Inpu
     const chunkSize = randomInteger(random, 2, 3);
     for (let index = 0; index < value.length; index += chunkSize) {
       await locator.pressSequentially(value.slice(index, index + chunkSize), { delay: pauseRange(random) });
-      await wait(randomInteger(random, 80, 220));
+      await wait(shortPause(random));
     }
     return;
   }
@@ -56,7 +88,7 @@ async function pressSequentially(locator: Locator, value: string, strategy: Inpu
   if (strategy === 'pause-after-prefix') {
     const prefixLength = Math.max(1, Math.floor(value.length / 2));
     await locator.pressSequentially(value.slice(0, prefixLength), { delay: pauseRange(random) });
-    await wait(randomInteger(random, 250, 650));
+    await wait(thinkingPause(random));
     await locator.pressSequentially(value.slice(prefixLength), { delay: pauseRange(random) });
     return;
   }
@@ -112,14 +144,14 @@ async function typeWithVirtualKeyboard(
 
   const typeCharacter = async (character: string) => {
     await getKeyboardKey(page, character.toLowerCase() as KeyboardKey).click();
-    await wait(randomInteger(random, 35, 120));
+    await wait(pauseRange(random));
   };
 
   if (strategy === 'chunked') {
     const chunkSize = randomInteger(random, 2, 3);
     for (let index = 0; index < value.length; index += chunkSize) {
       for (const character of value.slice(index, index + chunkSize)) await typeCharacter(character);
-      await wait(randomInteger(random, 80, 220));
+      await wait(shortPause(random));
     }
     return;
   }
@@ -127,7 +159,7 @@ async function typeWithVirtualKeyboard(
   if (strategy === 'pause-after-prefix') {
     const prefixLength = Math.max(1, Math.floor(value.length / 2));
     for (const character of value.slice(0, prefixLength)) await typeCharacter(character);
-    await wait(randomInteger(random, 250, 650));
+    await wait(thinkingPause(random));
     for (const character of value.slice(prefixLength)) await typeCharacter(character);
     return;
   }
@@ -157,7 +189,7 @@ async function correctNativeInput(
 
   await locator.press('End');
   for (let index = wrongIndex; index < expected.length; index += 1) await locator.press('Backspace');
-  await wait(randomInteger(random, 120, 360));
+  await wait(shortPause(random));
   await pressSequentially(locator, expected.slice(wrongIndex), pick(random, INPUT_STRATEGIES), wait, random);
 }
 
@@ -190,7 +222,11 @@ async function typeIdentityWithKeyboard(
 async function deleteIdentityCharacters(page: Page, count: number, random: () => number, wait: WaitFn) {
   for (let index = 0; index < count; index += 1) {
     await getKeyboardKey(page, 'del').click();
-    await wait(randomInteger(random, 30, 100));
+    await wait(randomInteger(
+      random,
+      MATURE_USER_TIMING.deleteMinMs,
+      MATURE_USER_TIMING.deleteMaxMs,
+    ));
   }
 }
 
@@ -207,7 +243,7 @@ async function correctIdentityWithKeyboard(
   const suffix = mode === 'partial' ? expected.slice(wrongIndex) : expected;
   for (const character of suffix) {
     await getKeyboardKey(page, character.toLowerCase() as KeyboardKey).click();
-    await wait(randomInteger(random, 35, 120));
+    await wait(pauseRange(random));
   }
 }
 
@@ -237,7 +273,7 @@ export async function fillPhone({
   const wrong = mutateValue(value, random);
   await typeWithVirtualKeyboard(page, LOCATORS.phoneInput, wrong.value, pick(random, INPUT_STRATEGIES), random, wait);
   await closeKeyboardIfVisible(page);
-  await wait(randomInteger(random, 250, 650));
+  await wait(thinkingPause(random));
   await focusVirtualInputAtEnd(page, LOCATORS.phoneInput);
   const mode = random() < 0.5 ? 'partial' : 'full';
   const deleteCount = mode === 'partial' ? value.length - wrong.index : value.length;
@@ -245,7 +281,7 @@ export async function fillPhone({
   const suffix = mode === 'partial' ? value.slice(wrong.index) : value;
   for (const character of suffix) {
     await getKeyboardKey(page, character as KeyboardKey).click();
-    await wait(randomInteger(random, 35, 120));
+    await wait(pauseRange(random));
   }
   await closeKeyboardIfVisible(page);
   return { strategy: 'error-corrected' as const, corrected: true };
@@ -278,7 +314,7 @@ export async function fillIdentity({
 
   if (shouldOmit) {
     await typeIdentityWithKeyboard(page, value.slice(0, -1), random, wait);
-    await wait(randomInteger(random, 250, 650));
+    await wait(thinkingPause(random));
     await getKeyboardKey(page, value.at(-1)!.toLowerCase() as KeyboardKey).click();
     await closeKeyboardIfVisible(page);
     return { strategy: 'missing-input-corrected' as const, corrected: true };
@@ -288,7 +324,7 @@ export async function fillIdentity({
     const wrong = mutateValue(value, random);
     await typeIdentityWithKeyboard(page, wrong.value, random, wait);
     await closeKeyboardIfVisible(page);
-    await wait(randomInteger(random, 250, 650));
+    await wait(thinkingPause(random));
     await correctIdentityWithKeyboard(
       page,
       value,
