@@ -4,8 +4,8 @@ import { dirname } from 'node:path';
 import { once } from 'node:events';
 import type { Page } from '@playwright/test';
 
-// 20fps 提高短暂点击反馈的可见概率，同时控制截图和编码开销。
-const FRAME_RATE = 20;
+// 30fps 提高短暂点击反馈的可见概率；实时补帧逻辑避免截图速度不足导致视频加速。
+const FRAME_RATE = 30;
 const FRAME_INTERVAL_MS = 1_000 / FRAME_RATE;
 const VIDEO_SIZE = { width: 393, height: 852 } as const;
 
