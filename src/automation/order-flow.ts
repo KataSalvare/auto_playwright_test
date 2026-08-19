@@ -5,10 +5,11 @@ import type { Locator, Page } from '@playwright/test';
 import { fillIdentity, fillName, fillPhone } from './human-input';
 import { hasValidIdentityChecksum } from './identity';
 import { byTestId, getSuccessToast, LOCATORS } from './locators';
+import { createMobileBrowseBehavior } from './mobile-browse';
 import type { LocatorTestId } from './locators';
 import { createSeededRandom, randomBetween } from './random';
 import { finalizeVideo } from './video-manager';
-import type { AutomationOptions, OrderInput, RunResult } from './types';
+import type { AutomationOptions, HumanBrowseBehavior, OrderInput, RunResult } from './types';
 
 const defaultOutputDir = resolve('output/videos');
 // 自动化统一模拟 iPhone 15 的完整屏幕尺寸，不随运行环境窗口变化。
@@ -18,6 +19,35 @@ const mark = (message: string) => console.log(`· ${message}`);
 const readingOverlayTriggerMs = 2_000;
 const readingWaitPollMs = 100;
 const readingOverlayDismissChance = 0.35;
+const firstOrderDirectPathChance = 0.8;
+const firstOrderAgreementOnlyPathChance = 0.15;
+
+type FirstOrderPreButtonPath = 'direct' | 'agreement-only' | 'full';
+
+export function chooseFirstOrderPreButtonPath(
+  random: () => number,
+  hasSocialSecurity: boolean,
+  autoRenewal: boolean,
+): FirstOrderPreButtonPath {
+  // 社保和续保同时为 1 时，按 80% / 15% / 5% 模拟三类用户；其他场景固定完整浏览。
+  if (!hasSocialSecurity || !autoRenewal) return 'full';
+
+  const roll = random();
+  if (roll < firstOrderDirectPathChance) return 'direct';
+  if (roll < firstOrderDirectPathChance + firstOrderAgreementOnlyPathChance) {
+    return 'agreement-only';
+  }
+  return 'full';
+}
+
+function assertBrowserLaunchAllowed() {
+  if (process.platform === 'darwin' && process.env.CODEX_SANDBOX) {
+    throw new Error(
+      '检测到当前命令运行在 Codex macOS 沙箱中；为避免 Chrome/Chromium 原生崩溃，请在 Terminal.app 或 iTerm2 中运行：\n'
+      + 'npm run automation:terminal -- --fixture=first-order',
+    );
+  }
+}
 
 /** 在多个同名元素中返回当前真正可见的元素。 */
 async function visibleLocator(locator: Locator, step: string): Promise<Locator> {
@@ -175,6 +205,25 @@ async function pauseAfterStep(random: () => number) {
   await waitConfigured(random, 1_000, 2_000);
 }
 
+/** 模拟用户浏览页面，直到目标控件进入可见区域。 */
+async function browseUntilVisible(
+  browse: HumanBrowseBehavior,
+  locator: Locator,
+  step: string,
+  maxSwipes = 5,
+) {
+  for (let swipe = 0; swipe <= maxSwipes; swipe += 1) {
+    if (await hasVisible(locator)) {
+      mark(`${step}：浏览到目标位置`);
+      await browse.pause();
+      return;
+    }
+    if (swipe < maxSwipes) await browse.scroll();
+  }
+
+  throw new Error(`经过 ${maxSwipes} 次浏览后${step}仍不可见`);
+}
+
 async function ensureAgreementChecked(page: Page) {
   const checkbox = await visibleLocator(
     byTestId(page, LOCATORS.agreementCheck),
@@ -215,12 +264,12 @@ async function runAgreementAndProductFlow(
 ) {
   // 主按钮已经触发协议弹窗，模拟用户阅读/浏览后再继续。
   if (options.waitAgreement) {
-    mark(`${flowLabel}步骤 ${agreementStep}：协议弹窗浏览等待 2–5 秒`);
+    mark(`${flowLabel}步骤 ${agreementStep}：协议弹窗浏览等待 1–5 秒`);
     await waitWhileBrowsing(
       page,
       LOCATORS.agreementClose,
       random,
-      2_000,
+      1_000,
       5_000,
       `${flowLabel}步骤 ${agreementStep}`,
     );
@@ -236,12 +285,12 @@ async function runAgreementAndProductFlow(
 
   // 协议确认已经触发产品弹窗，模拟用户查看/浏览产品后再选择。
   if (options.waitProduct) {
-    mark(`${flowLabel}步骤 ${productStep}：产品弹窗浏览等待 2–5 秒`);
+    mark(`${flowLabel}步骤 ${productStep}：产品弹窗浏览等待 1–5 秒`);
     await waitWhileBrowsing(
       page,
       LOCATORS.productClose,
       random,
-      2_000,
+      1_000,
       5_000,
       `${flowLabel}步骤 ${productStep}`,
     );
@@ -266,8 +315,8 @@ async function runFirstOrder(
   /*
    * 首单步骤：
    * 1 手机号；2 处理手机号弹窗；3 等待页面切换；4 姓名；5 身份证；
-   * 6 社保；7 续保；8 协议勾选；9 完善信息；10 协议弹窗；
-  * 11 产品；12 成功 Toast。
+   * 步骤 5 后按用户类型进入协议/社保/续保分支；9 完善信息；10 协议弹窗；
+   * 11 产品；12 成功 Toast。
   */
   // 步骤 1 前：页面打开后先随机等待，暂不执行滚动等浏览操作。
   mark('首单步骤 1 前：随机等待 2–5 秒');
@@ -320,32 +369,71 @@ async function runFirstOrder(
     );
   }
 
-  // 步骤 6：选择社保状态（浏览节点暂不执行，等待后续补充）。
-  mark('首单步骤 6：选择社保状态');
-  await selectBooleanOption(
-    page,
+  const preButtonPath = chooseFirstOrderPreButtonPath(
+    random,
     order.hasSocialSecurity,
-    LOCATORS.socialSecurityYes,
-    LOCATORS.socialSecurityNo,
-    '选择社保状态',
-  );
-  await pauseAfterStep(random);
-
-  // 步骤 7：选择是否自动续保。
-  mark('首单步骤 7：选择续保状态');
-  await selectBooleanOption(
-    page,
     order.autoRenewal,
-    LOCATORS.renewalYes,
-    LOCATORS.renewalNo,
-    '选择续保状态',
   );
-  await pauseAfterStep(random);
 
-  // 步骤 8：勾选协议。
-  mark('首单步骤 8：勾选同意协议');
-  await ensureAgreementChecked(page);
-  await pauseAfterStep(random);
+  if (preButtonPath === 'direct') {
+    // 方案 1：社保和续保均为 1 的大多数用户直接点击按钮，跳过步骤 6–8。
+    mark('首单步骤 6–8：直接点击按钮，跳过协议、社保和续保');
+  } else {
+    const browse = createMobileBrowseBehavior({
+      page,
+      profile: options.profile,
+      seed: options.seed + 1_001,
+    });
+
+    // 方案 2、3：先浏览页面，直到看到协议勾选位置。
+    mark('首单步骤 6：浏览页面并寻找协议勾选位置');
+    await browseUntilVisible(
+      browse,
+      byTestId(page, LOCATORS.agreementCheck),
+      '协议勾选位置',
+    );
+    mark('首单步骤 6：勾选同意协议');
+    await ensureAgreementChecked(page);
+    await pauseAfterStep(random);
+
+    if (preButtonPath === 'full') {
+      // 方案 3：继续浏览，再依次选择社保和续保。
+      mark('首单步骤 7：继续浏览并寻找社保选项');
+      await browseUntilVisible(
+        browse,
+        byTestId(page, order.hasSocialSecurity ? LOCATORS.socialSecurityYes : LOCATORS.socialSecurityNo),
+        '社保选项',
+      );
+      mark('首单步骤 7：选择社保状态');
+      await selectBooleanOption(
+        page,
+        order.hasSocialSecurity,
+        LOCATORS.socialSecurityYes,
+        LOCATORS.socialSecurityNo,
+        '选择社保状态',
+      );
+      await pauseAfterStep(random);
+
+      mark('首单步骤 8：继续浏览并寻找续保选项');
+      await browseUntilVisible(
+        browse,
+        byTestId(page, order.autoRenewal ? LOCATORS.renewalYes : LOCATORS.renewalNo),
+        '续保选项',
+      );
+      mark('首单步骤 8：选择续保状态');
+      await selectBooleanOption(
+        page,
+        order.autoRenewal,
+        LOCATORS.renewalYes,
+        LOCATORS.renewalNo,
+        '选择续保状态',
+      );
+      await pauseAfterStep(random);
+    } else {
+      // 方案 2：勾选协议后直接点击按钮，跳过社保和续保。
+      mark('首单步骤 7–8：浏览结束，跳过社保和续保');
+    }
+  }
 
   // 步骤 9：点击“点此登录/完善信息”进入保障流程。
   mark('首单步骤 9：点击完善信息');
@@ -388,6 +476,9 @@ export async function runOrderFlow(
   order: OrderInput,
   options: AutomationOptions,
 ): Promise<RunResult> {
+  // macOS 的 Chrome/Chromium 需要访问沙箱禁止的系统服务；在浏览器启动前给出明确提示。
+  assertBrowserLaunchAllowed();
+
   // 每个订单使用独立浏览器上下文；原生录像在 context 关闭时完成写入。
   const outputDir = options.outputDir || defaultOutputDir;
   const pendingDir = resolve(outputDir, '.pending');

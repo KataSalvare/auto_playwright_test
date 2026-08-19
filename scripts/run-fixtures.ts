@@ -12,7 +12,6 @@ const options: AutomationOptions = {
   waitAgreement: true,
   waitProduct: true,
   headless: process.env.HEADED === '1' ? false : automationConfig.headless,
-  browserChannel: automationConfig.browserChannel,
   deleteFailedVideo: automationConfig.deleteFailedVideo,
   outputDir: automationConfig.outputDir,
 };

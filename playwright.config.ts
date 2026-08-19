@@ -1,5 +1,4 @@
 import { defineConfig, devices } from '@playwright/test';
-import { automationConfig } from './automation.config';
 
 /**
  * Playwright test configuration.
@@ -16,7 +15,8 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: process.env.BASE_URL ?? 'https://example.com',
-    channel: process.env.PW_CHANNEL || automationConfig.browserChannel,
+    // 默认使用 Playwright 的 headless shell；只有显式设置 PW_CHANNEL 时才使用品牌浏览器。
+    channel: process.env.PW_CHANNEL || undefined,
     testIdAttribute: 'jing-testid',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

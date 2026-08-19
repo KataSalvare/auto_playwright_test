@@ -9,10 +9,14 @@ npm install
 npm run test:install
 ```
 
-如果本机已有 Google Chrome，也可以使用：
+默认使用 Playwright 的 headless shell，不会启动 macOS 的 Google Chrome 应用。
+如果从 Codex 沙箱执行订单流程，脚本会在启动浏览器前直接提示切换到普通终端，
+不会创建 Chrome/Chromium 子进程。
+
+如果确实需要本机 Google Chrome，请在 macOS 的 Terminal.app 或 iTerm2 中显式指定：
 
 ```bash
-PW_CHANNEL=chrome npm run automation -- --fixture=first-order
+PW_CHANNEL=chrome npm run automation:terminal -- --fixture=first-order
 ```
 
 使用 Playwright 原生 Video 录制。产品选择完成后等待 2–3 秒记录裁剪点，浏览器继续监控 `success`；流程结束后成功视频按裁剪点转码并输出到：
@@ -32,11 +36,13 @@ output/videos/success/<订单号>-success-<时间戳>.mp4
 ```ts
 export const automationConfig = {
   headless: false,          // false：显示浏览器，方便调试
-  browserChannel: 'chrome', // 使用本机 Chrome；删除此项则使用 Playwright Chromium
   deleteFailedVideo: false, // true：保留失败视频；false：删除失败视频
   outputDir: 'output/videos',
 };
 ```
+
+配置中不要默认填写 `browserChannel: 'chrome'`。如果需要显式使用本机 Chrome，
+通过 `PW_CHANNEL=chrome` 覆盖，并在普通 macOS 终端中启动。
 
 当 `deleteFailedVideo=true` 时，未出现 `success` 的视频会重命名并保留在：
 
@@ -86,12 +92,13 @@ npm run automation:fixtures
 
 ### 使用普通终端启动 Chrome
 
-Chrome 不要从 Codex 沙箱终端启动，请在 macOS 的 Terminal.app 或 iTerm2 中执行：
+只有显式使用 `PW_CHANNEL=chrome` 时才需要本节。Chrome 不要从 Codex 沙箱终端启动，
+请在 macOS 的 Terminal.app 或 iTerm2 中执行：
 
 ```bash
 cd "/Users/much/代码/仿朝发可回溯"
-npm run automation:terminal -- --fixture=first-order
-npm run automation:terminal -- --fixture=repeat-order
+PW_CHANNEL=chrome npm run automation:terminal -- --fixture=first-order
+PW_CHANNEL=chrome npm run automation:terminal -- --fixture=repeat-order
 ```
 
 也可以直接双击，或在普通终端执行：
@@ -144,12 +151,10 @@ npm run automation -- --fixture=first-order --dry-run
 3. 等待进入实名信息
 4. 输入姓名
 5. 输入身份证
-6. 选择社保状态
-7. 选择续保状态
-8. 勾选同意协议
+6–8. 步骤 5 后进入协议/社保/续保随机分支：当社保和续保均为 1 时，约 80% 用户直接点击按钮跳过 6–8，约 15% 用户浏览后只勾选协议，约 5% 用户浏览后依次勾选协议、选择社保和续保；其他场景固定执行完整浏览方案
 9. 点击完善信息
-10. 触发协议弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断同意按钮；用户关闭蒙层后仍可继续浏览再点击
-11. 触发产品弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断产品按钮；用户关闭蒙层后仍可继续浏览再点击
+10. 触发协议弹窗后浏览等待 1–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断同意按钮；用户关闭蒙层后仍可继续浏览再点击
+11. 触发产品弹窗后浏览等待 1–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断产品按钮；用户关闭蒙层后仍可继续浏览再点击
 12. 浏览器继续保留并监控成功 Toast，context 关闭后完成原生视频并按裁剪点生成 MP4
 
 非首单流程：
@@ -157,8 +162,8 @@ npm run automation -- --fixture=first-order --dry-run
 1. 步骤开始前随机等待 1–3 秒，等待页面稳定
 2. 勾选同意协议
 3. 点击完善信息
-4. 触发协议弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断同意按钮；用户关闭蒙层后仍可继续浏览再点击
-5. 触发产品弹窗后浏览等待 2–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断产品按钮；用户关闭蒙层后仍可继续浏览再点击
+4. 触发协议弹窗后浏览等待 1–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断同意按钮；用户关闭蒙层后仍可继续浏览再点击
+5. 触发产品弹窗后浏览等待 1–5 秒；等待超过约 2 秒可能出现蒙层，但不阻断产品按钮；用户关闭蒙层后仍可继续浏览再点击
 6. 浏览器继续保留并监控成功 Toast，context 关闭后完成原生视频并按裁剪点生成 MP4
 
 ## 定位器
@@ -186,8 +191,8 @@ page.getByTestId('success')
 
 ## 真人化浏览
 
-当前版本暂时移除了滚动、回滑和浏览停顿等页面浏览操作，等待后续补充具体浏览节点。
-`profile` 配置和 `src/automation/mobile-browse.ts` 暂时保留，当前订单流程不会调用。
+首单步骤 5 后的协议、社保和续保分支会调用页面浏览行为，使用 `profile` 配置控制滚动、停顿和回滑节奏。
+浏览会持续到对应的协议、社保或续保控件进入可见区域。
 
 后续恢复浏览节点时，可复用三个可复现画像：
 
@@ -208,3 +213,43 @@ npm test
 ```
 
 默认 `npm test` 只运行 smoke 和单元测试，不会自动访问两条业务测试链接。真实业务流程需要显式执行 `npm run automation`。
+
+## 快速测试页面
+
+快速测试控制台位于 [web/index.html](/Users/much/代码/仿朝发可回溯/web/index.html)，用于生成和校验业务测试链接。
+
+直接在浏览器打开 `web/index.html` 即可使用；如果浏览器限制了本地文件脚本，也可以在项目根目录启动静态服务：
+
+```bash
+python3 -m http.server 4173
+```
+
+然后访问 `http://localhost:4173/web/`。
+
+也可以直接使用终端入口管理服务：
+
+```bash
+# macOS
+./scripts/start-quick-test.command start
+./scripts/start-quick-test.command restart
+./scripts/start-quick-test.command stop
+
+# Windows PowerShell 或 CMD
+scripts\start-quick-test.bat start
+scripts\start-quick-test.bat restart
+scripts\start-quick-test.bat stop
+```
+
+服务启动后访问 `http://localhost:4173/web/`。也可以使用 `npm run quick-test:start`、
+`npm run quick-test:restart`、`npm run quick-test:stop` 和 `npm run quick-test:status`。
+默认端口是 `4173`，需要时可追加 `--port 4200`；日志保存在 `output/quick-test-server.log`。
+
+自动生成规则集中在 [web/test-config.js](/Users/much/代码/仿朝发可回溯/web/test-config.js)，可以修改：
+
+- `originalUrl`：原始 URL，默认为 `https://h5-subscribe.yunxiacn.com/temp-lp-jing/index/6100b6d7fb8d64de74245697b16a5a8d`
+- `defaults`：订单号前缀、姓名池、手机号前缀、价格、`shangdan`、`outerid` 和环境标记
+- `presets`：首单、非首单等流程预设，以及预设要附带的额外参数
+- `parameters`：页面参数字典及必填/可选标记
+- `videoBaseUrl`：成功视频的统一地址前缀；为空时页面仍会展示视频结果卡片，但提示视频地址待接入
+
+页面不会上传业务数据；最近生成的链接仅保存在当前浏览器的 `localStorage` 中。
