@@ -7,6 +7,8 @@ const execFileAsync = promisify(execFile);
 
 // iPhone 15 的目标录像尺寸；使用 yuv444p 保留 393 的奇数宽度。
 const IPHONE_15_VIDEO_SIZE = { width: 393, height: 852 } as const;
+// Chromium 移动端录像的最底部会带两行 viewport 边界色，先裁掉再拉伸回目标高度。
+const BOTTOM_VIEWPORT_BORDER_ROWS = 2;
 
 function safeFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -50,7 +52,7 @@ export async function finalizeVideo({
       '-i',
       recordedPath,
       '-vf',
-      `scale=${IPHONE_15_VIDEO_SIZE.width}:${IPHONE_15_VIDEO_SIZE.height}:flags=lanczos,format=yuv444p`,
+      `crop=iw:ih-${BOTTOM_VIEWPORT_BORDER_ROWS}:0:0,scale=${IPHONE_15_VIDEO_SIZE.width}:${IPHONE_15_VIDEO_SIZE.height}:flags=lanczos,format=yuv444p,setsar=1`,
       '-c:v',
       'libx264',
       '-pix_fmt',
