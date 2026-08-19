@@ -15,8 +15,8 @@ export const automationConfig = {
   // 使用本机 Chrome，避免重复下载浏览器；删除此项可改用 Playwright Chromium。
   browserChannel: 'chrome',
 
-  // false：失败视频移动到 output/playwright/videos/failed/，便于排查。
+  // true：失败视频移动到 output/videos/failed/；false：未出现 success 时删除视频。
   deleteFailedVideo: false,
 
-  outputDir: resolve('output/playwright/videos'),
+  outputDir: resolve('output/videos'),
 } satisfies AutomationConfig;

@@ -8,10 +8,11 @@ import { byTestId, getSuccessToast, LOCATORS } from './locators';
 import type { LocatorTestId } from './locators';
 import { createMobileBrowseBehavior } from './mobile-browse';
 import { createSeededRandom, randomBetween } from './random';
+import { startScreenRecorder } from './screen-recorder';
 import { finalizeVideo } from './video-manager';
 import type { AutomationOptions, OrderInput, RunResult } from './types';
 
-const defaultOutputDir = resolve('output/playwright/videos');
+const defaultOutputDir = resolve('output/videos');
 // 自动化统一模拟 iPhone 15 的完整屏幕尺寸，不随运行环境窗口变化。
 const iPhone15Screen = { width: 393, height: 852 } as const;
 const sleep = (durationMs: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs));
@@ -106,6 +107,7 @@ async function runAgreementAndProductFlow(
   flowLabel: string,
   agreementStep: number,
   productStep: number,
+  stopRecording: () => Promise<void>,
 ) {
   // 协议或产品弹窗被关闭，表示本次订单流程失败。
   await failIfClosed(page, LOCATORS.agreementClose, '强制阅读协议');
@@ -117,6 +119,11 @@ async function runAgreementAndProductFlow(
   if (options.waitProduct) await waitConfigured(random, 2_000, 2_000);
   mark(`${flowLabel}步骤 ${productStep}：选择${options.product === 'basic' ? '基础版' : '升级版'}产品`);
   await selectProduct(page, options.product);
+
+  // 产品选择完成后只再录制 2–3 秒；停止的是帧录像器，页面仍继续监控 success。
+  mark(`${flowLabel}步骤 ${productStep}：等待 2–3 秒后停止录像`);
+  await waitConfigured(random, 2_000, 3_000);
+  await stopRecording();
 }
 
 async function runFirstOrder(
@@ -124,6 +131,7 @@ async function runFirstOrder(
   order: OrderInput,
   options: AutomationOptions,
   random: () => number,
+  stopRecording: () => Promise<void>,
 ) {
   /*
    * 首单步骤：
@@ -198,14 +206,14 @@ async function runFirstOrder(
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
 
   // 步骤 10、11：处理协议弹窗并选择产品。
-  await runAgreementAndProductFlow(page, options, random, '首单', 10, 11);
-  await browse.pause({ minMs: 500, maxMs: 2_000 });
+  await runAgreementAndProductFlow(page, options, random, '首单', 10, 11, stopRecording);
 }
 
 async function runRepeatOrder(
   page: Page,
   options: AutomationOptions,
   random: () => number,
+  stopRecording: () => Promise<void>,
 ) {
   /* 非首单步骤：1 等待页面；2 勾选协议；3 完善信息；4 协议弹窗；5 产品；6 成功 Toast。 */
   const browse = createMobileBrowseBehavior({ page, profile: options.profile, seed: options.seed });
@@ -222,15 +230,14 @@ async function runRepeatOrder(
   await clickTestId(page, LOCATORS.mainButton, '点击完善信息');
 
   // 步骤 4、5：处理协议弹窗并选择产品。
-  await runAgreementAndProductFlow(page, options, random, '非首单', 4, 5);
-  await browse.pause({ minMs: 500, maxMs: 2_000 });
+  await runAgreementAndProductFlow(page, options, random, '非首单', 4, 5, stopRecording);
 }
 
 export async function runOrderFlow(
   order: OrderInput,
   options: AutomationOptions,
 ): Promise<RunResult> {
-  // 每个订单使用独立浏览器上下文；关闭上下文后才能安全取得完整录像。
+  // 每个订单使用独立浏览器上下文；录像停止后页面仍保留到 success 监控结束。
   const outputDir = options.outputDir || defaultOutputDir;
   const pendingDir = resolve(outputDir, '.pending');
   await mkdir(pendingDir, { recursive: true });
@@ -248,13 +255,17 @@ export async function runOrderFlow(
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     colorScheme: 'light',
-    recordVideo: {
-      dir: pendingDir,
-      size: iPhone15Screen,
-    },
   });
   const page = await context.newPage();
-  const video = page.video();
+  const recordingPath = resolve(pendingDir, `${order.orderId}-${Date.now()}.mp4`);
+  const recorder = await startScreenRecorder({ page, outputPath: recordingPath });
+  let recordedPath: string | undefined;
+  let recordingStopped = false;
+  const stopRecording = async () => {
+    if (recordingStopped) return;
+    recordedPath = await recorder.stop();
+    recordingStopped = true;
+  };
   const random = createSeededRandom(options.seed + 101);
   let success = false;
   let failure: unknown;
@@ -262,8 +273,8 @@ export async function runOrderFlow(
   try {
     mark(`打开页面：流程 ${order.pageOrder}`);
     await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
-    if (order.pageOrder === 1) await runFirstOrder(page, order, options, random);
-    else await runRepeatOrder(page, options, random);
+    if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, stopRecording);
+    else await runRepeatOrder(page, options, random, stopRecording);
 
     const flowLabel = order.pageOrder === 1 ? '首单' : '非首单';
     const successStep = order.pageOrder === 1 ? 12 : 6;
@@ -271,17 +282,22 @@ export async function runOrderFlow(
     mark(`${flowLabel}步骤 ${successStep}：等待成功 Toast`);
     await waitForAnyVisible(getSuccessToast(page), 30_000, '成功 Toast');
     success = true;
-    mark(`${flowLabel}步骤 ${successStep}：检测到成功 Toast，等待录像完整记录`);
-    await waitConfigured(random, 800, 1_200);
+    mark(`${flowLabel}步骤 ${successStep}：检测到成功 Toast`);
   } catch (error) {
     failure = error;
   } finally {
+    try {
+      // 产品前失败时也要先收尾录像，再关闭页面；正常流程此处是幂等空操作。
+      await stopRecording();
+    } catch (error) {
+      if (!failure) failure = error;
+    }
     await context.close();
     await browser.close();
   }
 
   const videoPath = await finalizeVideo({
-    video,
+    recordedPath,
     success,
     orderId: order.orderId,
     outputDir,

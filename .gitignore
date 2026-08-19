@@ -10,5 +10,6 @@ playwright/.auth/
 .playwright-browsers/
 .playwright-cli/
 output/playwright/
+output/videos/
 
 *.log

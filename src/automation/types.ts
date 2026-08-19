@@ -53,7 +53,7 @@ export interface AutomationConfig {
   headless: boolean;
   /** 使用本机浏览器通道；留空时使用 Playwright 安装的 Chromium。 */
   browserChannel?: BrowserChannel;
-  /** 未出现 success Toast 时是否删除失败视频。 */
+  /** 未出现 success Toast 时是否保留失败视频并移动到 failed 目录。 */
   deleteFailedVideo: boolean;
   /** 视频输出目录。 */
   outputDir: string;

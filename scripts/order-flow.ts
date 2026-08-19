@@ -28,7 +28,7 @@ function printHelp() {
   --wait-product=true|false           是否等待产品蒙层，默认 true
   --headed                            临时使用有头浏览器
   --headless                          临时使用无头浏览器
-  --delete-failed-video=true|false    控制是否删除失败视频
+  --delete-failed-video=true|false    true：保留失败视频，false：删除失败视频
   --keep-failed-video                 临时保留失败视频到 failed 目录
   --dry-run                           只解析链接，不启动浏览器
 `);
@@ -71,7 +71,7 @@ function parseArgs(argv: string[]) {
       continue;
     }
     if (argument === '--keep-failed-video') {
-      options.deleteFailedVideo = false;
+      options.deleteFailedVideo = true;
       continue;
     }
     if (argument === '--dry-run') {

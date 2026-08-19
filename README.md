@@ -15,10 +15,10 @@ npm run test:install
 PW_CHANNEL=chrome npm run automation -- --fixture=first-order
 ```
 
-视频成功后输出到：
+产品选择完成后等待 2–3 秒停止录像，浏览器继续监控 `success`。成功视频输出到：
 
 ```text
-output/playwright/videos/<订单号>.mp4
+output/videos/success/<订单号>-success-<时间戳>.mp4
 ```
 
 生成 MP4 需要本机安装 `ffmpeg`。
@@ -33,16 +33,18 @@ output/playwright/videos/<订单号>.mp4
 export const automationConfig = {
   headless: false,          // false：显示浏览器，方便调试
   browserChannel: 'chrome', // 使用本机 Chrome；删除此项则使用 Playwright Chromium
-  deleteFailedVideo: false, // false：保留失败视频
-  outputDir: 'output/playwright/videos',
+  deleteFailedVideo: false, // true：保留失败视频；false：删除失败视频
+  outputDir: 'output/videos',
 };
 ```
 
-当 `deleteFailedVideo=false` 时，未出现 `success` 的视频会保留在：
+当 `deleteFailedVideo=true` 时，未出现 `success` 的视频会重命名并保留在：
 
 ```text
-output/playwright/videos/failed/<订单号>-<时间戳>.webm
+output/videos/failed/<订单号>-failed-<时间戳>.mp4
 ```
+
+当 `deleteFailedVideo=false` 时，未出现 `success` 的视频会直接删除。
 
 单次运行也可以覆盖配置：
 
@@ -50,7 +52,7 @@ output/playwright/videos/failed/<订单号>-<时间戳>.webm
 npm run automation -- --fixture=first-order --headed
 npm run automation -- --fixture=first-order --headless
 npm run automation -- --fixture=first-order --keep-failed-video
-npm run automation -- --fixture=first-order --delete-failed-video=false
+npm run automation -- --fixture=first-order --delete-failed-video=true
 ```
 
 ## 执行订单流程
@@ -128,8 +130,8 @@ npm run automation -- --fixture=first-order --dry-run
 8. 勾选同意协议
 9. 点击完善信息
 10. 同意强制阅读协议
-11. 选择基础版或升级版产品
-12. 等待并确认成功 Toast
+11. 选择基础版或升级版产品，等待 2–3 秒后停止录像
+12. 浏览器继续保留并监控成功 Toast
 
 非首单流程：
 
@@ -137,8 +139,8 @@ npm run automation -- --fixture=first-order --dry-run
 2. 勾选同意协议
 3. 点击完善信息
 4. 同意强制阅读协议
-5. 选择基础版或升级版产品
-6. 等待并确认成功 Toast
+5. 选择基础版或升级版产品，等待 2–3 秒后停止录像
+6. 浏览器继续保留并监控成功 Toast
 
 ## 定位器
 
