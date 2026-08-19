@@ -11,7 +11,7 @@
  *
  * 只使用 Node.js 内置模块，不依赖 Python 或额外前端服务。
  */
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { extname, join, normalize, relative, resolve } from 'node:path';
@@ -25,7 +25,7 @@ const OUTPUT_DIR = resolve(PROJECT_DIR, 'output');
 const VIDEO_ROOT = resolve(OUTPUT_DIR, 'videos');
 const QUICK_RUN_ROOT = resolve(OUTPUT_DIR, 'quick-test-runs');
 const RUNNER_SCRIPT = resolve(PROJECT_DIR, 'scripts', 'quick-test-runner.ts');
-const STATE_FILE = resolve(OUTPUT_DIR, 'quick-test-server.json');
+const LEGACY_STATE_FILE = resolve(OUTPUT_DIR, 'quick-test-server.json');
 const LOG_FILE = resolve(OUTPUT_DIR, 'quick-test-server.log');
 const DEFAULT_PORT = 4173;
 const DEFAULT_HOST = '127.0.0.1';
@@ -57,11 +57,52 @@ function parseOptions(args) {
 }
 
 function ensureOutputDir() { mkdirSync(OUTPUT_DIR, { recursive: true }); }
-function readState() { try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')); } catch { return null; } }
-function removeState() { if (existsSync(STATE_FILE)) unlinkSync(STATE_FILE); }
+function stateFileForPort(port) { return resolve(OUTPUT_DIR, `quick-test-server-${port}.json`); }
+function readState(port) {
+  const files = [stateFileForPort(port)];
+  if (port === DEFAULT_PORT) files.push(LEGACY_STATE_FILE);
+  for (const file of files) {
+    try {
+      const state = JSON.parse(readFileSync(file, 'utf8'));
+      if (state.port === port) return state;
+    } catch { /* state file does not exist or is incomplete */ }
+  }
+  return null;
+}
+function removeState(port) {
+  for (const file of [stateFileForPort(port), ...(port === DEFAULT_PORT ? [LEGACY_STATE_FILE] : [])]) {
+    if (existsSync(file)) unlinkSync(file);
+  }
+}
 function isRunning(pid) { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } }
-function writeState(state) { ensureOutputDir(); writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); }
+function writeState(state) { ensureOutputDir(); writeFileSync(stateFileForPort(state.port), JSON.stringify(state, null, 2)); }
 function displayHost(host) { return host === '0.0.0.0' || host === '::' ? 'localhost' : host; }
+
+function probeQuickTestServer(options) {
+  const hostname = options.host === '0.0.0.0' ? '127.0.0.1' : options.host;
+  return new Promise((resolvePromise) => {
+    const request = httpRequest({ hostname, port: options.port, path: '/api/quick-test/health', method: 'GET', timeout: 500 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => {
+        try { resolvePromise(response.statusCode === 200 ? JSON.parse(body) : null); } catch { resolvePromise(null); }
+      });
+    });
+    request.on('error', () => resolvePromise(null));
+    request.on('timeout', () => request.destroy());
+    request.end();
+  });
+}
+
+async function stopOrphanedQuickTestServer(options) {
+  const discovered = await probeQuickTestServer(options);
+  if (discovered?.service !== 'quick-test-server' || !isRunning(discovered.pid)) return false;
+  try { process.kill(discovered.pid); } catch { return false; }
+  const deadline = Date.now() + 3000;
+  while (isRunning(discovered.pid) && Date.now() < deadline) await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  return !isRunning(discovered.pid);
+}
 
 function safeWebPath(requestPath) {
   let pathname;
@@ -170,6 +211,7 @@ function serveVideo(filePath, request, response) {
 function serveCommand(options) {
   if (!existsSync(WEB_ROOT)) throw new Error(`找不到前端目录：${WEB_ROOT}`);
   const server = createServer((request, response) => {
+    if ((request.url || '').split('?')[0] === '/api/quick-test/health') { sendJson(response, 200, { service: 'quick-test-server', pid: process.pid, port: options.port }); return; }
     if ((request.url || '').split('?')[0] === '/api/quick-test/run') { executeQuickTest(request, response).catch((error) => sendJson(response, 500, { error: error.message || '自动化测试执行失败' })); return; }
     const videoPath = safeVideoPath(request.url || '/');
     if (videoPath) {
@@ -189,7 +231,7 @@ function serveCommand(options) {
     }
   });
 
-  const cleanup = () => { const state = readState(); if (state?.pid === process.pid) removeState(); };
+  const cleanup = () => { const state = readState(options.port); if (state?.pid === process.pid) removeState(options.port); };
   const shutdown = () => server.close(() => { cleanup(); process.exit(0); });
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
   server.on('error', (error) => { console.error(`快速测试服务启动失败：${error.message}`); cleanup(); process.exit(1); });
@@ -197,9 +239,11 @@ function serveCommand(options) {
 }
 
 async function startCommand(args) {
-  const options = parseOptions(args); const current = readState();
+  const options = parseOptions(args); const current = readState(options.port);
   if (current && isRunning(current.pid)) { console.log(`服务已经在运行：http://${displayHost(current.host)}:${current.port}/web/`); return; }
-  removeState(); ensureOutputDir(); const logHandle = openSync(LOG_FILE, 'a');
+  removeState(options.port);
+  await stopOrphanedQuickTestServer(options);
+  ensureOutputDir(); const logHandle = openSync(LOG_FILE, 'a');
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve', '--port', String(options.port), '--host', options.host], { cwd: PROJECT_DIR, detached: true, stdio: ['ignore', logHandle, logHandle] });
   let spawnError;
   child.once('error', (error) => { spawnError = error; });
@@ -207,7 +251,7 @@ async function startCommand(args) {
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
     if (spawnError) throw new Error(`无法启动服务：${spawnError.message}`);
-    const state = readState();
+    const state = readState(options.port);
     if (state?.pid === child.pid && isRunning(child.pid)) {
       console.log(`快速测试页面已启动：http://${displayHost(options.host)}:${options.port}/web/`); console.log(`日志文件：${LOG_FILE}`); return;
     }
@@ -217,23 +261,23 @@ async function startCommand(args) {
   throw new Error(`服务启动失败或端口 ${options.port} 已被占用，请查看日志：${LOG_FILE}`);
 }
 
-async function stopCommand() {
-  const current = readState(); if (!current || !isRunning(current.pid)) { removeState(); console.log('快速测试服务当前未运行。'); return; }
+async function stopCommand(args) {
+  const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); console.log('快速测试服务当前未运行。'); return; }
   try { process.kill(current.pid); } catch (error) { throw new Error(`无法停止服务（PID ${current.pid}）：${error.message}`); }
   const deadline = Date.now() + 3000; while (isRunning(current.pid) && Date.now() < deadline) await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   if (isRunning(current.pid)) throw new Error(`服务仍在运行，请手动结束进程 PID ${current.pid}`);
-  removeState(); console.log('快速测试服务已停止。');
+  removeState(options.port); console.log('快速测试服务已停止。');
 }
 
-function statusCommand() { const current = readState(); if (!current || !isRunning(current.pid)) { removeState(); console.log('快速测试服务当前未运行。'); return; } console.log(`快速测试服务运行中：http://${displayHost(current.host)}:${current.port}/web/（PID ${current.pid}）`); }
+function statusCommand(args) { const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); console.log('快速测试服务当前未运行。'); return; } console.log(`快速测试服务运行中：http://${displayHost(current.host)}:${current.port}/web/（PID ${current.pid}）`); }
 
 async function main() {
   const [command = 'restart', ...args] = process.argv.slice(2);
   if (command === 'serve') serveCommand(parseOptions(args));
   else if (command === 'start') await startCommand(args);
-  else if (command === 'restart') { await stopCommand(); await startCommand(args); }
-  else if (command === 'stop') await stopCommand();
-  else if (command === 'status') statusCommand();
+  else if (command === 'restart') { await stopCommand(args); await startCommand(args); }
+  else if (command === 'stop') await stopCommand(args);
+  else if (command === 'status') statusCommand(args);
   else throw new Error(`未知命令：${command}。可用命令：start、restart、stop、status`);
 }
 
