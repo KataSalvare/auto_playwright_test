@@ -7,7 +7,7 @@ import { hasValidIdentityChecksum } from './identity';
 import { byTestId, getSuccessToast, LOCATORS } from './locators';
 import { createMobileBrowseBehavior } from './mobile-browse';
 import type { LocatorTestId } from './locators';
-import { createSeededRandom, randomBetween } from './random';
+import { createSeededRandom, pick, randomBetween } from './random';
 import { finalizeVideo } from './video-manager';
 import type { AutomationOptions, HumanBrowseBehavior, OrderInput, RunResult } from './types';
 
@@ -21,6 +21,9 @@ const readingWaitPollMs = 100;
 const readingOverlayDismissChance = 0.35;
 const firstOrderDirectPathChance = 0.8;
 const firstOrderAgreementOnlyPathChance = 0.15;
+const firstOrderPageBrowseMinMs = 4_000;
+const firstOrderPageBrowseMaxMs = 12_000;
+const BROWSE_PROFILES = ['skimmer', 'reader', 'distracted'] as const;
 
 type FirstOrderPreButtonPath = 'direct' | 'agreement-only' | 'full';
 
@@ -38,6 +41,10 @@ export function chooseFirstOrderPreButtonPath(
     return 'agreement-only';
   }
   return 'full';
+}
+
+export function chooseRandomBrowseProfile(random: () => number) {
+  return pick(random, BROWSE_PROFILES);
 }
 
 function assertBrowserLaunchAllowed() {
@@ -200,6 +207,26 @@ async function waitConfigured(random: () => number, minMs: number, maxMs: number
   await sleep(Math.round(randomBetween(random, minMs, maxMs)));
 }
 
+function startFirstOrderPageBrowse(random: () => number) {
+  const durationMs = Math.round(randomBetween(
+    random,
+    firstOrderPageBrowseMinMs,
+    firstOrderPageBrowseMaxMs,
+  ));
+  mark(`首单步骤 6–8：页面整体浏览 ${Math.round(durationMs / 100) / 10} 秒`);
+  return { deadline: Date.now() + durationMs };
+}
+
+async function finishFirstOrderPageBrowse(
+  browseSession: { deadline: number },
+  step: string,
+) {
+  const remainingMs = browseSession.deadline - Date.now();
+  if (remainingMs <= 0) return;
+  mark(`${step}：继续浏览详情页 ${Math.round(remainingMs / 100) / 10} 秒`);
+  await sleep(remainingMs);
+}
+
 /** 每个业务步骤完成后模拟用户观察页面的 1–2 秒停顿。 */
 async function pauseAfterStep(random: () => number) {
   await waitConfigured(random, 1_000, 2_000);
@@ -210,6 +237,7 @@ async function browseUntilVisible(
   browse: HumanBrowseBehavior,
   locator: Locator,
   step: string,
+  browseSession?: { deadline: number },
   maxSwipes = 5,
 ) {
   for (let swipe = 0; swipe <= maxSwipes; swipe += 1) {
@@ -218,6 +246,7 @@ async function browseUntilVisible(
       await browse.pause();
       return;
     }
+    if (browseSession && Date.now() >= browseSession.deadline) break;
     if (swipe < maxSwipes) await browse.scroll();
   }
 
@@ -379,9 +408,12 @@ async function runFirstOrder(
     // 方案 1：社保和续保均为 1 的大多数用户直接点击按钮，跳过步骤 6–8。
     mark('首单步骤 6–8：直接点击按钮，跳过协议、社保和续保');
   } else {
+    const browseProfile = options.profile ?? chooseRandomBrowseProfile(random);
+    mark(`首单浏览画像：${browseProfile}`);
+    const browseSession = startFirstOrderPageBrowse(random);
     const browse = createMobileBrowseBehavior({
       page,
-      profile: options.profile,
+      profile: browseProfile,
       seed: options.seed + 1_001,
     });
 
@@ -391,6 +423,7 @@ async function runFirstOrder(
       browse,
       byTestId(page, LOCATORS.agreementCheck),
       '协议勾选位置',
+      browseSession,
     );
     mark('首单步骤 6：勾选同意协议');
     await ensureAgreementChecked(page);
@@ -403,6 +436,7 @@ async function runFirstOrder(
         browse,
         byTestId(page, order.hasSocialSecurity ? LOCATORS.socialSecurityYes : LOCATORS.socialSecurityNo),
         '社保选项',
+        browseSession,
       );
       mark('首单步骤 7：选择社保状态');
       await selectBooleanOption(
@@ -419,6 +453,7 @@ async function runFirstOrder(
         browse,
         byTestId(page, order.autoRenewal ? LOCATORS.renewalYes : LOCATORS.renewalNo),
         '续保选项',
+        browseSession,
       );
       mark('首单步骤 8：选择续保状态');
       await selectBooleanOption(
@@ -433,6 +468,8 @@ async function runFirstOrder(
       // 方案 2：勾选协议后直接点击按钮，跳过社保和续保。
       mark('首单步骤 7–8：浏览结束，跳过社保和续保');
     }
+
+    await finishFirstOrderPageBrowse(browseSession, '首单步骤 6–8');
   }
 
   // 步骤 9：点击“点此登录/完善信息”进入保障流程。

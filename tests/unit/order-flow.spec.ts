@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { chooseFirstOrderPreButtonPath } from '../../src/automation/order-flow';
+import {
+  chooseFirstOrderPreButtonPath,
+  chooseRandomBrowseProfile,
+} from '../../src/automation/order-flow';
 
 test.describe('首单步骤 5 后的协议/社保/续保分支', () => {
   test('方案 1：社保和续保均为 1 时，大多数用户直接跳过 6–8', () => {
@@ -14,5 +17,11 @@ test.describe('首单步骤 5 后的协议/社保/续保分支', () => {
     expect(chooseFirstOrderPreButtonPath(() => 0.99, true, true)).toBe('full');
     expect(chooseFirstOrderPreButtonPath(() => 0.01, true, false)).toBe('full');
     expect(chooseFirstOrderPreButtonPath(() => 0.01, false, true)).toBe('full');
+  });
+
+  test('浏览画像未固定时随机选择三种方案', () => {
+    expect(chooseRandomBrowseProfile(() => 0)).toBe('skimmer');
+    expect(chooseRandomBrowseProfile(() => 0.34)).toBe('reader');
+    expect(chooseRandomBrowseProfile(() => 0.99)).toBe('distracted');
   });
 });

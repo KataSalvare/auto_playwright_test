@@ -42,7 +42,8 @@ export interface OrderInput {
 export interface AutomationOptions {
   seed: number;
   inputStrategy?: InputStrategy;
-  profile: BrowseProfile;
+  /** 未指定时，首单浏览会在三种画像中随机选择。 */
+  profile?: BrowseProfile;
   product: ProductChoice;
   waitAgreement: boolean;
   waitProduct: boolean;

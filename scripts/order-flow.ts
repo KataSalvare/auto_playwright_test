@@ -30,7 +30,7 @@ function printHelp() {
   --fixture=first-order|repeat-order  使用内置测试链接
   --seed=<整数>                       固定随机行为
   --input-strategy=<方案>             强制输入方案：sequential|chunked|variable|pause-after-prefix|slow-tail
-  --profile=reader|skimmer|distracted 移动浏览画像，默认 reader
+  --profile=reader|skimmer|distracted 固定移动浏览画像；不传则随机选择
   --product=basic|upgrade             产品选择，默认 basic
   --wait-agreement=true|false         是否等待协议蒙层，默认 true
   --wait-product=true|false           是否等待产品蒙层，默认 true
@@ -55,7 +55,7 @@ function parseArgs(argv: string[]) {
   const options: AutomationOptions = {
     seed: Date.now(),
     inputStrategy: undefined,
-    profile: 'reader',
+    profile: undefined,
     product: 'basic',
     waitAgreement: true,
     waitProduct: true,

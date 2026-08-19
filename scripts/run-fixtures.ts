@@ -7,7 +7,7 @@ import type { AutomationOptions } from '../src/automation/types';
 /** 批量执行两个内置夹具；单条调试请使用 scripts/order-flow.ts。 */
 const options: AutomationOptions = {
   seed: Number(process.env.AUTOMATION_SEED ?? Date.now()),
-  profile: (process.env.AUTOMATION_PROFILE as AutomationOptions['profile'] | undefined) ?? 'reader',
+  profile: process.env.AUTOMATION_PROFILE as AutomationOptions['profile'] | undefined,
   product: (process.env.AUTOMATION_PRODUCT as AutomationOptions['product'] | undefined) ?? 'basic',
   waitAgreement: true,
   waitProduct: true,
