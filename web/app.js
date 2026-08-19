@@ -4,6 +4,7 @@
   const config = window.TEST_CONFIG || {};
   const requiredKeys = (config.parameters || []).filter((item) => item.group === 'required').map((item) => item.key);
   const optionalKeys = (config.parameters || []).filter((item) => item.group === 'optional').map((item) => item.key);
+  const runStorageKey = 'quick-test-current-run-v1';
   const state = { mode: 'auto', presetId: config.presets?.[0]?.id || '', currentUrl: '', validation: null, run: null };
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -24,7 +25,7 @@
   function initialize() {
     $('[data-app-name]').textContent = config.appName || '快速测试控制台';
     $$('[data-app-version]').forEach((element) => { element.textContent = config.appVersion || 'local'; });
-    renderPresets(); renderParameterTable(); ensureAdvancedModal(); resetForm(); bindEvents(); updatePlanPreview();
+    renderPresets(); renderParameterTable(); ensureAdvancedModal(); resetForm(); bindEvents(); updatePlanPreview(); restoreRun();
   }
 
   function renderPresets() {
@@ -33,6 +34,39 @@
   }
   function selectPreset(presetId) { state.presetId = presetId; const preset = currentPreset(); setInput('pageOrder', preset.pageOrder ?? config.defaults?.pageOrder ?? '1'); setInput('socialSecurity', preset.socialSecurity ?? config.defaults?.socialSecurity ?? '1'); setInput('autoRenewal', preset.autoRenewal ?? config.defaults?.autoRenewal ?? '1'); setInput('shangdan', preset.extraParams?.shangdan ?? config.defaults?.shangdan ?? ''); renderPresets(); }
   function renderParameterTable() { $('#parameterTable').innerHTML = (config.parameters || []).map((item) => `<tr><td>${escapeHtml(item.key)}</td><td>${escapeHtml(item.label)}</td><td><span class="param-type ${item.group === 'required' ? 'required' : ''}">${item.group === 'required' ? 'REQUIRED' : 'OPTIONAL'}</span></td><td>${escapeHtml(item.description)}</td><td><span class="param-status">●</span></td></tr>`).join(''); }
+
+  function persistRun() {
+    if (!state.run?.runId) return;
+    try { window.sessionStorage.setItem(runStorageKey, JSON.stringify({ ...state.run, currentUrl: state.currentUrl })); } catch { /* 浏览器禁用存储时保持内存模式 */ }
+  }
+  function restoreRun() {
+    let savedRun;
+    try { savedRun = JSON.parse(window.sessionStorage.getItem(runStorageKey) || 'null'); } catch { savedRun = null; }
+    if (!savedRun?.runId || !Array.isArray(savedRun.results) || !savedRun.total) return;
+    state.run = savedRun;
+    state.currentUrl = savedRun.currentUrl || '';
+    if (state.currentUrl) {
+      try { validateAndRender(state.currentUrl, '已恢复上次链接'); } catch { state.validation = null; }
+    }
+    $('#resultsEmpty').hidden = true; $('#resultsContent').hidden = false; $('#step4').classList.remove('is-locked');
+    setWorkflowStep(4); renderRun();
+    if (state.run.completedAt) {
+      $('#runProgress').hidden = true; $('#runAgainButton').disabled = false;
+      setRunStatus(state.run.failed ? 'error' : 'success', state.run.failed ? '部分失败' : '全部成功');
+      return;
+    }
+    $('#runProgress').hidden = false; $('#runAgainButton').disabled = true; setRunStatus('running', '恢复执行状态');
+    pollRun(state.run.runId).then(() => {
+      if (!state.run) return;
+      $('#runProgress').hidden = true; $('#runAgainButton').disabled = false;
+      setRunStatus(state.run.failed ? 'error' : 'success', state.run.failed ? '部分失败' : '全部成功'); renderRun();
+    }).catch((error) => {
+      if (!state.run) return;
+      state.run.results = state.run.results.map((item) => item.status === 'queued' || item.status === 'running' ? { ...item, status: 'failed', error: '页面刷新后无法恢复脚本状态' } : item);
+      state.run.failed = state.run.results.filter((item) => item.status === 'failed').length; state.run.completed = state.run.results.length; state.run.completedAt = Date.now();
+      $('#runProgress').hidden = true; $('#runAgainButton').disabled = false; setRunStatus('error', '执行状态已失效'); persistRun(); renderRun(); showToast(error instanceof Error ? error.message : '执行状态已失效');
+    });
+  }
 
   function resetForm() {
     selectPreset(state.presetId || config.presets?.[0]?.id); setInput('testName', defaultName()); setInput('orderId', createOrderId()); setInput('phone', createPhone()); setInput('identityNumber', createIdentityNumber()); setInput('basePrice', config.defaults?.basePrice || '10.99'); setInput('upgradePrice', config.defaults?.upgradePrice || '99.9'); setInput('originalUrl', config.originalUrl || config.baseUrl || ''); setInput('shangdan', config.defaults?.shangdan || ''); setInput('outerid', config.defaults?.outerid || config.defaults?.source || ''); setInput('manualUrl', ''); setInput('testCount', '3'); setInput('concurrency', '1');
@@ -54,7 +88,7 @@
 
   function validateAndRender(rawUrl, sourceLabel) {
     let url; try { url = new URL(rawUrl); } catch { clearValidation(); setResultStatus('error', '链接无效'); showToast('链接格式无效，请检查后重试'); return false; }
-    const validation = validateParams(url); state.run = null; clearRun(); state.currentUrl = url.toString(); state.validation = validation; $('#validationEmpty').hidden = true; $('#validationContent').hidden = false; $('#urlBox').textContent = state.currentUrl; $('#resultHeadline').textContent = validation.allValid ? sourceLabel : '链接需要修正'; $('#resultSubline').textContent = validation.allValid ? '所有必要参数均已通过校验，可以配置测试执行' : '请根据下方提示修正失败项'; $('#resultTime').textContent = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); setResultStatus(validation.allValid ? 'success' : 'error', validation.allValid ? '校验通过' : '校验失败'); renderChecks(validation); setExecutionAvailability(validation.allValid); setWorkflowStep(validation.allValid ? 3 : 2); return validation.allValid;
+    const validation = validateParams(url); state.currentUrl = url.toString(); state.validation = validation; $('#validationEmpty').hidden = true; $('#validationContent').hidden = false; $('#urlBox').textContent = state.currentUrl; $('#resultHeadline').textContent = validation.allValid ? sourceLabel : '链接需要修正'; $('#resultSubline').textContent = validation.allValid ? '所有必要参数均已通过校验，可以配置测试执行' : '请根据下方提示修正失败项'; $('#resultTime').textContent = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); setResultStatus(validation.allValid ? 'success' : 'error', validation.allValid ? '校验通过' : '校验失败'); renderChecks(validation); setExecutionAvailability(validation.allValid); setWorkflowStep(state.run ? 4 : validation.allValid ? 3 : 2); return validation.allValid;
   }
   function setResultStatus(type, text) { const status = $('#resultStatus'); status.className = `result-status ${type === 'idle' ? '' : `is-${type}`}`; status.innerHTML = `<span class="status-dot"></span>${escapeHtml(text)}`; }
   function clearValidation() { $('#validationEmpty').hidden = false; $('#validationContent').hidden = true; setResultStatus('idle', '等待链接'); setExecutionAvailability(false); }
@@ -68,7 +102,7 @@
   function normalizeNumberInput(id) { const input = $(`#${id}`); input.value = clampNumber(input.value, Number(input.min), Number(input.max)); updatePlanPreview(); }
 
   function createPendingResults(total) { return Array.from({ length: total }, (_, offset) => ({ index: offset + 1, status: 'queued', successful: false, duration: '—', videoUrl: '', error: '' })); }
-  function applyRunPayload(payload) { if (!state.run) return; state.run.runId = payload.runId || state.run.runId; state.run.status = payload.status || state.run.status; state.run.completed = payload.completedCount ?? state.run.completed; state.run.success = payload.success ?? state.run.success; state.run.failed = payload.failed ?? state.run.failed; state.run.completedAt = payload.completedAt || state.run.completedAt; state.run.results = (payload.results || state.run.results).map((item) => ({ ...item, status: item.status || (item.successful ? 'success' : 'failed'), successful: Boolean(item.successful), duration: item.duration || '—', videoUrl: item.videoUrl || '', error: item.error || '' })); }
+  function applyRunPayload(payload) { if (!state.run) return; state.run.runId = payload.runId || state.run.runId; state.run.status = payload.status || state.run.status; state.run.completed = payload.completedCount ?? state.run.completed; state.run.success = payload.success ?? state.run.success; state.run.failed = payload.failed ?? state.run.failed; state.run.completedAt = payload.completedAt || state.run.completedAt; state.run.results = (payload.results || state.run.results).map((item) => ({ ...item, status: item.status || (item.successful ? 'success' : 'failed'), successful: Boolean(item.successful), duration: item.duration || '—', videoUrl: item.videoUrl || '', error: item.error || '' })); persistRun(); }
   async function pollRun(runId) { while (state.run?.runId === runId && !state.run.completedAt) { await delay(500); const response = await fetch(`/api/quick-test/run/${encodeURIComponent(runId)}`); const payload = await response.json(); if (!response.ok) throw new Error(payload.error || '无法读取测试执行状态'); applyRunPayload(payload); renderRun(); if (payload.done) break; } }
   async function startTests() {
     if (!state.validation?.allValid) { showToast('请先通过链接规范校验'); return; }
@@ -109,7 +143,6 @@
     $('#generateButton').addEventListener('click', () => { const valid = validateAndRender(buildUrl(buildParams()), '链接已准备就绪'); showToast(valid ? '链接生成并校验通过' : '链接已生成，请检查规范'); }); $('#validateButton').addEventListener('click', () => { const rawUrl = getInput('manualUrl'); if (!rawUrl) { showToast('请先粘贴一个测试链接'); return; } validateAndRender(rawUrl, '链接解析完成'); });
     $('#copyButton').addEventListener('click', copyCurrentUrl); $('#copyInlineButton').addEventListener('click', copyCurrentUrl); $('#openButton').addEventListener('click', () => { if (state.currentUrl) window.open(state.currentUrl, '_blank', 'noopener'); });
     $('#startTestButton').addEventListener('click', startTests); $('#runAgainButton').addEventListener('click', startTests); $('#testCount').addEventListener('input', () => normalizeNumberInput('testCount')); $('#concurrency').addEventListener('input', () => normalizeNumberInput('concurrency')); $$('[data-step-target]').forEach((button) => button.addEventListener('click', () => { const input = $(`#${button.dataset.stepTarget}`); input.value = Number(input.value) + Number(button.dataset.step); normalizeNumberInput(button.dataset.stepTarget); }));
-    $('#resetAllButton').addEventListener('click', () => { resetForm(); showToast('测试流程已重置'); });
     addEvent('#openParametersButton', 'click', () => { $('#parameterModal').hidden = false; }); addEvent('#closeParametersButton', 'click', () => closeModal('parameterModal')); addEvent('#modalDoneButton', 'click', () => closeModal('parameterModal')); addEvent('#closeAdvancedButton', 'click', () => closeModal('advancedModal')); addEvent('#advancedDoneButton', 'click', () => closeModal('advancedModal')); addEvent('#closeVideoButton', 'click', () => closeModal('videoModal')); $$('.modal-backdrop, .video-backdrop').forEach((backdrop) => backdrop.addEventListener('click', (event) => { if (event.target === backdrop) closeModal(backdrop.id); })); document.addEventListener('click', (event) => { const target = event.target?.closest?.('#closeAdvancedButton, #advancedDoneButton'); if (target) closeModal('advancedModal'); });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeModal('parameterModal'); closeModal('advancedModal'); closeModal('videoModal'); } if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); if (state.mode === 'auto') $('#generateButton').click(); else $('#validateButton').click(); } });
   }
