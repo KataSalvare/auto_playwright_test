@@ -22,6 +22,25 @@ function createVirtualKeyboardPage() {
   return { page, clicked, inputClicks };
 }
 
+function createStatefulIdentityPage() {
+  let identityValue = '';
+  const page = {
+    getByTestId: (testId: string) => ({
+      click: async () => {
+        if (/^[0-9x]$/.test(testId)) identityValue += testId;
+        if (testId === 'del') identityValue = identityValue.slice(0, -1);
+      },
+      isVisible: async () => false,
+      boundingBox: async () => ({ x: 0, y: 0, width: 100, height: 40 }),
+    }),
+  } as unknown as Page;
+
+  return {
+    page,
+    getIdentityValue: () => identityValue,
+  };
+}
+
 test('身份证漏输导致 18 位校验失败后删除并完整重输', async () => {
   const { page, clicked } = createVirtualKeyboardPage();
   const identityNumber = '320381198812252138';
@@ -86,4 +105,36 @@ test('手机号错误输入后从字段末尾开始删除修正', async () => {
     testId: 'phone_input',
     position: { x: 98, y: 20 },
   });
+});
+
+test('身份证错误修正的多种删除位置最终都能得到正确值', async () => {
+  const identityNumber = '320381198812252138';
+
+  for (let seed = 1; seed <= 100; seed += 1) {
+    const { page, getIdentityValue } = createStatefulIdentityPage();
+    await fillIdentity({
+      page,
+      value: identityNumber,
+      seed,
+      inputStrategy: 'sequential',
+      missingChance: 0,
+      errorChance: 1,
+      wait: async () => undefined,
+    });
+    expect(getIdentityValue(), `输错场景 seed=${seed}`).toBe(identityNumber);
+  }
+
+  for (let seed = 1; seed <= 100; seed += 1) {
+    const { page, getIdentityValue } = createStatefulIdentityPage();
+    await fillIdentity({
+      page,
+      value: identityNumber,
+      seed,
+      inputStrategy: 'sequential',
+      missingChance: 1,
+      errorChance: 0,
+      wait: async () => undefined,
+    });
+    expect(getIdentityValue(), `漏输场景 seed=${seed}`).toBe(identityNumber);
+  }
 });
