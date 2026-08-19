@@ -4,28 +4,34 @@ import type { BrowseProfile, HumanBrowseBehavior, WaitFn } from './types';
 
 export const BROWSE_PROFILES = Object.freeze({
   skimmer: Object.freeze({
-    minScrollRatio: 0.45,
-    maxScrollRatio: 0.76,
+    minScrollRatio: 0.28,
+    maxScrollRatio: 0.48,
     minDuration: 900,
     maxDuration: 1_700,
+    microPauseMin: 450,
+    microPauseMax: 900,
     pauseMin: 1_000,
     pauseMax: 2_400,
     backtrackChance: 0.08,
   }),
   reader: Object.freeze({
-    minScrollRatio: 0.25,
-    maxScrollRatio: 0.52,
+    minScrollRatio: 0.18,
+    maxScrollRatio: 0.34,
     minDuration: 1_200,
     maxDuration: 2_400,
+    microPauseMin: 700,
+    microPauseMax: 1_600,
     pauseMin: 1_800,
     pauseMax: 4_200,
     backtrackChance: 0.28,
   }),
   distracted: Object.freeze({
-    minScrollRatio: 0.2,
-    maxScrollRatio: 0.42,
+    minScrollRatio: 0.12,
+    maxScrollRatio: 0.26,
     minDuration: 800,
     maxDuration: 1_800,
+    microPauseMin: 550,
+    microPauseMax: 1_300,
     pauseMin: 1_000,
     pauseMax: 3_200,
     backtrackChance: 0.36,
@@ -33,6 +39,17 @@ export const BROWSE_PROFILES = Object.freeze({
 });
 
 const defaultWait: WaitFn = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs));
+
+/** 判断元素是否真正进入当前 viewport，而不是只存在于 DOM 中。 */
+export async function isLocatorInViewport(locator: Locator): Promise<boolean> {
+  const box = await locator.boundingBox().catch(() => null);
+  const viewport = locator.page().viewportSize();
+  if (!box || !viewport) return false;
+  return box.x < viewport.width
+    && box.y < viewport.height
+    && box.x + box.width > 0
+    && box.y + box.height > 0;
+}
 
 export function createMobileBrowseBehavior({
   page,
@@ -86,9 +103,22 @@ export function createMobileBrowseBehavior({
       profileConfig.maxScrollRatio,
     );
     const duration = randomBetween(random, profileConfig.minDuration, profileConfig.maxDuration);
-    const steps = randomInteger(random, 18, 32);
+    const chunks = randomInteger(random, 2, 3);
+    const chunkDistance = distance / chunks;
+    const chunkDuration = duration / chunks;
+    let steps = 0;
 
-    await performGesture(distance, duration, steps);
+    for (let chunk = 0; chunk < chunks; chunk += 1) {
+      const chunkSteps = randomInteger(random, 12, 18);
+      steps += chunkSteps;
+      await performGesture(chunkDistance, chunkDuration, chunkSteps);
+      if (chunk < chunks - 1) {
+        await pause({
+          minMs: profileConfig.microPauseMin,
+          maxMs: profileConfig.microPauseMax,
+        });
+      }
+    }
     await pause();
 
     let backtracked = false;
@@ -104,9 +134,9 @@ export function createMobileBrowseBehavior({
     return { distance, duration, steps, backtracked };
   }
 
-  async function scrollUntilVisible(locator: Locator, { maxSwipes = 5 } = {}) {
+  async function scrollUntilVisible(locator: Locator, { maxSwipes = 8 } = {}) {
     for (let swipe = 0; swipe <= maxSwipes; swipe += 1) {
-      if (await locator.isVisible()) return { swipes: swipe };
+      if (await isLocatorInViewport(locator)) return { swipes: swipe };
       if (swipe < maxSwipes) await scroll();
     }
     throw new Error(`经过 ${maxSwipes} 次滑动后目标仍不可见`);

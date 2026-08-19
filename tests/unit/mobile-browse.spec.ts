@@ -38,6 +38,10 @@ test('相同 seed 生成相同的滚动轨迹', async () => {
   expect(firstResult).toEqual(secondResult);
   expect(first.wheelDeltas).toEqual(second.wheelDeltas);
   expect(first.waits).toEqual(second.waits);
+  expect(firstResult.distance).toBeGreaterThanOrEqual(844 * 0.18);
+  expect(firstResult.distance).toBeLessThanOrEqual(844 * 0.34);
+  expect(firstResult.steps).toBeGreaterThanOrEqual(24);
+  expect(first.waits.length).toBeGreaterThan(firstResult.steps);
 });
 
 test('scrollUntilVisible 在目标出现后停止', async () => {
@@ -50,9 +54,37 @@ test('scrollUntilVisible 在目标出现后停止', async () => {
   });
   let checks = 0;
   const locator = {
-    isVisible: async () => ++checks >= 3,
+    boundingBox: async () => {
+      checks += 1;
+      return checks >= 3
+        ? { x: 0, y: 0, width: 100, height: 100 }
+        : { x: 0, y: 1_000, width: 100, height: 100 };
+    },
+    page: () => fake.page,
   } as never;
 
   await expect(browse.scrollUntilVisible(locator, { maxSwipes: 4 })).resolves.toEqual({ swipes: 2 });
   expect(fake.wheelDeltas.length).toBeGreaterThan(0);
+});
+
+test('scrollUntilVisible 不把 DOM 可见误判为视口可见', async () => {
+  const fake = createFakePage();
+  const browse = createMobileBrowseBehavior({
+    page: fake.page,
+    profile: 'reader',
+    seed: 1,
+    wait: async () => {},
+  });
+  let viewportChecks = 0;
+  const locator = {
+    boundingBox: async () => {
+      viewportChecks += 1;
+      return viewportChecks >= 3
+        ? { x: 0, y: 0, width: 100, height: 100 }
+        : { x: 0, y: 1_000, width: 100, height: 100 };
+    },
+    page: () => fake.page,
+  } as never;
+
+  await expect(browse.scrollUntilVisible(locator, { maxSwipes: 4 })).resolves.toEqual({ swipes: 2 });
 });

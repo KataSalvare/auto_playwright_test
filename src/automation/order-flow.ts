@@ -5,7 +5,7 @@ import type { Locator, Page } from '@playwright/test';
 import { fillIdentity, fillName, fillPhone } from './human-input';
 import { hasValidIdentityChecksum } from './identity';
 import { byTestId, getSuccessToast, LOCATORS } from './locators';
-import { createMobileBrowseBehavior } from './mobile-browse';
+import { createMobileBrowseBehavior, isLocatorInViewport } from './mobile-browse';
 import type { LocatorTestId } from './locators';
 import { createSeededRandom, pick, randomBetween } from './random';
 import { finalizeVideo } from './video-manager';
@@ -78,6 +78,20 @@ async function visibleLocators(locator: Locator): Promise<Locator[]> {
 
 async function hasVisible(locator: Locator): Promise<boolean> {
   return (await visibleLocators(locator)).length > 0;
+}
+
+async function hasInViewport(locator: Locator): Promise<boolean> {
+  const count = await locator.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = locator.nth(index);
+    if (
+      await candidate.isVisible().catch(() => false)
+      && await isLocatorInViewport(candidate)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function readingOverlayIsVisible(page: Page, closeTestId?: LocatorTestId): Promise<boolean> {
@@ -238,15 +252,14 @@ async function browseUntilVisible(
   locator: Locator,
   step: string,
   browseSession?: { deadline: number },
-  maxSwipes = 5,
+  maxSwipes = 8,
 ) {
   for (let swipe = 0; swipe <= maxSwipes; swipe += 1) {
-    if (await hasVisible(locator)) {
+    if (await hasInViewport(locator)) {
       mark(`${step}：浏览到目标位置`);
       await browse.pause();
       return;
     }
-    if (browseSession && Date.now() >= browseSession.deadline) break;
     if (swipe < maxSwipes) await browse.scroll();
   }
 
