@@ -7,7 +7,9 @@ test.describe('订单链接参数解析', () => {
     const order = parseOrderUrl(ORDER_FIXTURES['first-order']);
 
     expect(order.pageOrder).toBe(1);
+    expect(order.phone).toBe('15900000000');
     expect(order.name).toBe('卡塔');
+    expect(order.identityNumber).toBe('320381198812252138');
     expect(order.hasSocialSecurity).toBe(true);
     expect(order.autoRenewal).toBe(true);
     expect(order.extraParams.bxres).toBe('0');
@@ -17,6 +19,8 @@ test.describe('订单链接参数解析', () => {
     const order = parseOrderUrl(ORDER_FIXTURES['repeat-order']);
 
     expect(order.pageOrder).toBe(2);
+    expect(order.phone).toBe('15900000000');
+    expect(order.identityNumber).toBe('320381198812252138');
     expect(order.extraParams.bxres).toBe('1');
     expect(order.extraParams.shangdan).toBe('安康一生');
   });

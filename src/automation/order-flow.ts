@@ -136,10 +136,7 @@ async function runFirstOrder(
     missingChance: options.identityMissingChance,
   });
 
-  mark('首单：提交实名信息并进入保障选择');
-  await clickTestId(page, LOCATORS.mainButton, '提交姓名和身份证');
   if (!hasValidIdentityChecksum(order.identityNumber)) {
-    await sleep(500);
     throw new Error(
       '测试链接中的身份证号未通过校验位规则，页面无法进入社保步骤；请提供校验通过的测试身份证',
     );

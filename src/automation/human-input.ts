@@ -77,6 +77,22 @@ async function closeKeyboardIfVisible(page: Page) {
   }
 }
 
+async function focusVirtualInputAtEnd(page: Page, inputTestId: LocatorTestId) {
+  const input = byTestId(page, inputTestId);
+  const box = await input.boundingBox().catch(() => null);
+  if (!box) {
+    await input.click();
+    return;
+  }
+
+  await input.click({
+    position: {
+      x: Math.max(1, box.width - 2),
+      y: Math.max(1, box.height / 2),
+    },
+  });
+}
+
 async function clearNativeInput(locator: Locator) {
   await locator.press('ControlOrMeta+A');
   await locator.press('Backspace');
@@ -184,9 +200,8 @@ async function correctIdentityWithKeyboard(
   random: () => number,
   wait: WaitFn,
 ) {
-  await byTestId(page, LOCATORS.identityInput).click();
-  const currentLength = mode === 'full' ? expected.length : expected.length;
-  await deleteIdentityCharacters(page, currentLength - (mode === 'partial' ? wrongIndex : 0), random, wait);
+  await focusVirtualInputAtEnd(page, LOCATORS.identityInput);
+  await deleteIdentityCharacters(page, expected.length - (mode === 'partial' ? wrongIndex : 0), random, wait);
   const suffix = mode === 'partial' ? expected.slice(wrongIndex) : expected;
   for (const character of suffix) {
     await getKeyboardKey(page, character.toLowerCase() as KeyboardKey).click();
@@ -220,7 +235,7 @@ export async function fillPhone({
   await typeWithVirtualKeyboard(page, LOCATORS.phoneInput, wrong.value, pick(random, INPUT_STRATEGIES), random, wait);
   await closeKeyboardIfVisible(page);
   await wait(randomInteger(random, 250, 650));
-  await byTestId(page, LOCATORS.phoneInput).click();
+  await focusVirtualInputAtEnd(page, LOCATORS.phoneInput);
   const mode = random() < 0.5 ? 'partial' : 'full';
   const deleteCount = mode === 'partial' ? value.length - wrong.index : value.length;
   await deleteIdentityCharacters(page, deleteCount, random, wait);
@@ -259,9 +274,8 @@ export async function fillIdentity({
 
   if (shouldOmit) {
     await typeIdentityWithKeyboard(page, value.slice(0, -1), random, wait);
-    await closeKeyboardIfVisible(page);
     await wait(randomInteger(random, 250, 650));
-    await correctIdentityWithKeyboard(page, value, value.length - 1, 'partial', random, wait);
+    await getKeyboardKey(page, value.at(-1)!.toLowerCase() as KeyboardKey).click();
     await closeKeyboardIfVisible(page);
     return { strategy: 'missing-input-corrected' as const, corrected: true };
   }
