@@ -240,6 +240,8 @@ scripts\start-quick-test.bat restart
 scripts\start-quick-test.bat stop
 ```
 
+如果不带任何参数重复执行 Mac 或 Windows 入口文件，服务运行中会自动重启；服务未运行时则直接启动。
+
 服务启动后访问 `http://localhost:4173/web/`。也可以使用 `npm run quick-test:start`、
 `npm run quick-test:restart`、`npm run quick-test:stop` 和 `npm run quick-test:status`。
 默认端口是 `4173`，需要时可追加 `--port 4200`；日志保存在 `output/quick-test-server.log`。

@@ -10,4 +10,9 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-node scripts/quick-test-server.mjs "$@"
+if (( $# == 0 )); then
+  # 不带参数重复执行时：运行中则重启，未运行则启动。
+  node scripts/quick-test-server.mjs restart
+else
+  node scripts/quick-test-server.mjs "$@"
+fi

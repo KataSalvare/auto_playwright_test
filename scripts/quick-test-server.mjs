@@ -126,7 +126,7 @@ async function stopCommand() {
 function statusCommand() { const current = readState(); if (!current || !isRunning(current.pid)) { removeState(); console.log('快速测试服务当前未运行。'); return; } console.log(`快速测试服务运行中：http://${displayHost(current.host)}:${current.port}/web/（PID ${current.pid}）`); }
 
 async function main() {
-  const [command = 'start', ...args] = process.argv.slice(2);
+  const [command = 'restart', ...args] = process.argv.slice(2);
   if (command === 'serve') serveCommand(parseOptions(args));
   else if (command === 'start') await startCommand(args);
   else if (command === 'restart') { await stopCommand(); await startCommand(args); }

@@ -10,4 +10,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-node scripts\quick-test-server.mjs %*
+if "%~1"=="" (
+  rem 不带参数重复执行时：运行中则重启，未运行则启动。
+  node scripts\quick-test-server.mjs restart
+) else (
+  node scripts\quick-test-server.mjs %*
+)
