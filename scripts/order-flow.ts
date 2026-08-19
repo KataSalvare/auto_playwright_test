@@ -5,6 +5,9 @@ import { runOrderFlow } from '../src/automation/order-flow';
 import { parseOrderUrl, safeUrlDescription } from '../src/automation/url-config';
 import type { AutomationOptions, BrowseProfile, ProductChoice } from '../src/automation/types';
 
+/**
+ * 单条订单自动化测试入口：解析参数、选择流程、启动移动端浏览器并录制视频。
+ */
 const profiles = new Set<BrowseProfile>(['skimmer', 'reader', 'distracted']);
 const products = new Set<ProductChoice>(['basic', 'upgrade']);
 
@@ -53,6 +56,7 @@ function parseArgs(argv: string[]) {
     outputDir: automationConfig.outputDir,
   };
 
+  // 命令行参数会覆盖 automation.config.ts 中的默认配置。
   for (const argument of argv) {
     if (argument === '--help' || argument === '-h') {
       printHelp();
@@ -120,6 +124,7 @@ function parseArgs(argv: string[]) {
 }
 
 async function main() {
+  // dry-run 只校验链接参数，不会启动浏览器。
   const { targetUrl, options, dryRun, fixture } = parseArgs(process.argv.slice(2));
   const order = parseOrderUrl(targetUrl);
 

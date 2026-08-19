@@ -78,6 +78,7 @@ async function closeKeyboardIfVisible(page: Page) {
 }
 
 async function focusVirtualInputAtEnd(page: Page, inputTestId: LocatorTestId) {
+  // 自定义键盘输入框不是原生 input，重新聚焦时点击最右侧才能把光标放到末尾。
   const input = byTestId(page, inputTestId);
   const box = await input.boundingBox().catch(() => null);
   if (!box) {
@@ -106,6 +107,7 @@ async function typeWithVirtualKeyboard(
   random: () => number,
   wait: WaitFn,
 ) {
+  // 手机号和身份证通过页面自定义数字键盘输入，避免直接 fill 绕过真实交互。
   await byTestId(page, inputTestId).click();
 
   const typeCharacter = async (character: string) => {
@@ -216,6 +218,7 @@ export async function fillPhone({
   wait = defaultWait,
   errorChance = 0.2,
 }: HumanInputOptions & { value: string; errorChance?: number }) {
+  // 按随机策略输入手机号；错误分支会删除后从字段末尾纠正。
   const random = createSeededRandom(seed + 11);
 
   if (!chance(random, errorChance)) {
@@ -268,6 +271,7 @@ export async function fillIdentity({
   errorChance = 0.25,
   missingChance = 0.1,
 }: HumanInputOptions & { value: string; errorChance?: number; missingChance?: number }) {
+  // 身份证支持正常输入、漏输补齐和错误删除重输三种路径。
   const random = createSeededRandom(seed + 37);
   const shouldOmit = chance(random, missingChance);
   const shouldError = !shouldOmit && chance(random, errorChance);

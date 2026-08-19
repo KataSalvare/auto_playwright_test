@@ -53,6 +53,33 @@ npm run automation -- --fixture=first-order --delete-failed-video=false
 
 ## 执行订单流程
 
+### 测试脚本位置
+
+单条订单测试脚本是：
+
+```text
+scripts/order-flow.ts
+```
+
+它由 `npm run automation` 调用。两个内置夹具的批量入口是：
+
+```text
+scripts/run-fixtures.ts
+```
+
+常用运行方式：
+
+```bash
+# 首单：shunxu=1
+npm run automation -- --fixture=first-order
+
+# 非首单：shunxu=2
+npm run automation -- --fixture=repeat-order
+
+# 两条夹具连续执行
+npm run automation:fixtures
+```
+
 使用内置测试链接：
 
 ```bash

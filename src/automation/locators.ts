@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import type { KeyboardKey } from './types';
 
+/** 页面约定的 jing-testid 映射，业务交互统一从这里取定位器。 */
 export const LOCATORS = Object.freeze({
   phoneInput: 'phone_input',
   phoneContinue: 'continue',
@@ -45,10 +46,12 @@ export type LocatorTestId = (typeof LOCATORS)[keyof typeof LOCATORS] | KeyboardK
 export const LEGACY_SUCCESS_TOAST_TEXT = 'jing-testid=success';
 
 export function byTestId(page: Page, testId: LocatorTestId) {
+  // Playwright 配置已将 testIdAttribute 设置为 jing-testid。
   return page.getByTestId(testId);
 }
 
 export function getKeyboardKey(page: Page, key: KeyboardKey) {
+  // 键盘只接受白名单类型，避免拼接任意选择器。
   return page.getByTestId(key);
 }
 

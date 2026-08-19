@@ -15,6 +15,7 @@ const defaultOutputDir = resolve('output/playwright/videos');
 const sleep = (durationMs: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs));
 const mark = (message: string) => console.log(`· ${message}`);
 
+/** 在多个同名元素中返回当前真正可见的元素。 */
 async function visibleLocator(locator: Locator, step: string): Promise<Locator> {
   const count = await locator.count();
   for (let index = 0; index < count; index += 1) {
@@ -29,6 +30,8 @@ async function clickTestId(page: Page, testId: LocatorTestId, step: string) {
   try {
     await target.click({ timeout: 5_000 });
   } catch (error) {
+    // 主按钮可能刚触发弹窗，弹窗遮挡会让 Playwright 报点击被拦截；
+    // 只要目标弹窗已经出现，就视为主按钮点击已生效。
     const mainButtonTriggeredPopup = testId === LOCATORS.mainButton && (
       await byTestId(page, LOCATORS.phoneContinue).isVisible().catch(() => false)
       || await byTestId(page, LOCATORS.agreementContinue).isVisible().catch(() => false)
@@ -99,6 +102,7 @@ async function runAgreementAndProductFlow(
   options: AutomationOptions,
   random: () => number,
 ) {
+  // 协议或产品弹窗被关闭，表示本次订单流程失败。
   await failIfClosed(page, LOCATORS.agreementClose, '强制阅读协议');
   if (options.waitAgreement) await waitConfigured(random, 2_000, 2_000);
   await clickTestId(page, LOCATORS.agreementContinue, '协议同意并继续');
@@ -114,6 +118,7 @@ async function runFirstOrder(
   options: AutomationOptions,
   random: () => number,
 ) {
+  // 首单：手机号登录后补充实名信息，页面自动进入保障选择步骤。
   mark('首单：输入手机号');
   await fillPhone({
     page,
@@ -173,6 +178,7 @@ async function runRepeatOrder(
   options: AutomationOptions,
   random: () => number,
 ) {
+  // 非首单已经有实名信息，只需完成协议和产品选择。
   const browse = createMobileBrowseBehavior({ page, profile: options.profile, seed: options.seed });
   mark('非首单：等待并进入投保流程');
   await browse.pause({ minMs: 2_000, maxMs: 3_000 });
@@ -187,6 +193,7 @@ export async function runOrderFlow(
   order: OrderInput,
   options: AutomationOptions,
 ): Promise<RunResult> {
+  // 每个订单使用独立浏览器上下文；关闭上下文后才能安全取得完整录像。
   const outputDir = options.outputDir || defaultOutputDir;
   const pendingDir = resolve(outputDir, '.pending');
   await mkdir(pendingDir, { recursive: true });

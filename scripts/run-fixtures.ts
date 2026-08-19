@@ -4,6 +4,7 @@ import { runOrderFlow } from '../src/automation/order-flow';
 import { parseOrderUrl } from '../src/automation/url-config';
 import type { AutomationOptions } from '../src/automation/types';
 
+/** 批量执行两个内置夹具；单条调试请使用 scripts/order-flow.ts。 */
 const options: AutomationOptions = {
   seed: Number(process.env.AUTOMATION_SEED ?? Date.now()),
   profile: (process.env.AUTOMATION_PROFILE as AutomationOptions['profile'] | undefined) ?? 'reader',
@@ -17,6 +18,7 @@ const options: AutomationOptions = {
 };
 
 async function main() {
+  // 顺序执行首单和非首单，任意一个失败都会终止本轮批量测试。
   for (const [name, url] of Object.entries(ORDER_FIXTURES)) {
     const order = parseOrderUrl(url);
     console.log(`开始夹具：${name}，流程 ${order.pageOrder}`);
