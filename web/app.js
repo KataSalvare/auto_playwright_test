@@ -23,7 +23,6 @@
   function initialize() {
     $('[data-app-name]').textContent = config.appName || '快速测试控制台';
     $$('[data-app-version]').forEach((element) => { element.textContent = config.appVersion || 'local'; });
-    $('[data-required-count]').textContent = requiredKeys.length; $('[data-optional-count]').textContent = optionalKeys.length;
     renderPresets(); renderParameterTable(); resetForm(); bindEvents(); renderHistory(); updatePlanPreview();
   }
 
