@@ -112,8 +112,8 @@ async function runAgreementAndProductFlow(
   await failIfClosed(page, LOCATORS.agreementClose, '强制阅读协议');
   // 主按钮已经触发协议弹窗，模拟用户阅读后再继续。
   if (options.waitAgreement) {
-    mark(`${flowLabel}步骤 ${agreementStep}：协议弹窗随机等待 1–5 秒`);
-    await waitConfigured(random, 1_000, 5_000);
+    mark(`${flowLabel}步骤 ${agreementStep}：协议弹窗随机等待 2–5 秒`);
+    await waitConfigured(random, 2_000, 5_000);
   }
   mark(`${flowLabel}步骤 ${agreementStep}：点击强制阅读协议弹窗同意并继续`);
   await clickTestId(page, LOCATORS.agreementContinue, '协议同意并继续');
@@ -121,15 +121,15 @@ async function runAgreementAndProductFlow(
   await failIfClosed(page, LOCATORS.productClose, '选择产品');
   // 协议确认已经触发产品弹窗，模拟用户查看产品后再选择。
   if (options.waitProduct) {
-    mark(`${flowLabel}步骤 ${productStep}：产品弹窗随机等待 1–3 秒`);
-    await waitConfigured(random, 1_000, 3_000);
+    mark(`${flowLabel}步骤 ${productStep}：产品弹窗随机等待 2–5 秒`);
+    await waitConfigured(random, 2_000, 5_000);
   }
   mark(`${flowLabel}步骤 ${productStep}：选择${options.product === 'basic' ? '基础版' : '升级版'}产品`);
   await selectProduct(page, options.product);
 
-  // 产品选择完成后只再录制 1–3 秒；停止的是帧录像器，页面仍继续监控 success。
-  mark(`${flowLabel}步骤 ${productStep}：等待 1–3 秒后停止录像`);
-  await waitConfigured(random, 1_000, 3_000);
+  // 产品选择完成后只再录制 2–3 秒；停止的是帧录像器，页面仍继续监控 success。
+  mark(`${flowLabel}步骤 ${productStep}：等待 2–3 秒后停止录像`);
+  await waitConfigured(random, 2_000, 3_000);
   await stopRecording();
 }
 
@@ -147,8 +147,8 @@ async function runFirstOrder(
   * 11 产品；12 成功 Toast。
   */
   // 步骤 1 前：页面打开后先随机等待，暂不执行滚动等浏览操作。
-  mark('首单步骤 1 前：随机等待 1–3 秒');
-  await waitConfigured(random, 1_000, 3_000);
+  mark('首单步骤 1 前：随机等待 2–5 秒');
+  await waitConfigured(random, 2_000, 5_000); 
   // 步骤 1：输入手机号。
   mark('首单步骤 1：输入手机号');
   await fillPhone({
@@ -163,7 +163,7 @@ async function runFirstOrder(
 
   // 步骤 3：等待页面切换到实名信息区域。
   mark('首单步骤 3：等待页面进入实名信息');
-  await waitConfigured(random, 2_000, 3_000);
+  await waitConfigured(random, 2_000, 5_000);
 
   // 步骤 4：输入姓名。
   mark('首单步骤 4：输入姓名');
@@ -225,8 +225,8 @@ async function runRepeatOrder(
 ) {
   /* 非首单步骤：1 等待页面；2 勾选协议；3 完善信息；4 协议弹窗；5 产品；6 成功 Toast。 */
   // 步骤 1 前：页面打开后先随机等待，暂不执行滚动等浏览操作。
-  mark('非首单步骤 1 前：随机等待 1–3 秒');
-  await waitConfigured(random, 1_000, 3_000);
+  mark('非首单步骤 1 前：随机等待 2–5 秒');
+  await waitConfigured(random, 2_000, 5_000);
   // 步骤 1：页面稳定后继续处理已有实名信息。
   mark('非首单步骤 1：页面稳定');
 
