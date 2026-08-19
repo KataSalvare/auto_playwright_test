@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { automationConfig } from '../automation.config';
 import { runOrderFlow } from '../src/automation/order-flow';
 import { parseOrderUrl } from '../src/automation/url-config';
@@ -28,6 +28,7 @@ function failureVideoPath(message: string): string | undefined {
 async function main() {
   const [targetUrl] = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
   const resultFile = optionValue('--result-file');
+  const outputDir = resolve(optionValue('--output-dir') || 'output/quick-test-videos');
   if (!targetUrl) throw new Error('快速测试执行器缺少业务链接');
 
   try {
@@ -39,7 +40,7 @@ async function main() {
       waitProduct: true,
       headless: true,
       deleteFailedVideo: automationConfig.deleteFailedVideo,
-      outputDir: automationConfig.outputDir,
+      outputDir,
     });
     await writeResult(resultFile, { success: true, videoPath: result.videoPath });
   } catch (error) {

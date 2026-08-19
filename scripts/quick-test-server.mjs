@@ -12,8 +12,8 @@
  * 只使用 Node.js 内置模块，不依赖 Python 或额外前端服务。
  */
 import { createServer, request as httpRequest } from 'node:http';
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -22,14 +22,22 @@ const SCRIPT_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const PROJECT_DIR = resolve(SCRIPT_DIR, '..');
 const WEB_ROOT = resolve(PROJECT_DIR, 'web');
 const OUTPUT_DIR = resolve(PROJECT_DIR, 'output');
-const VIDEO_ROOT = resolve(OUTPUT_DIR, 'videos');
+const LEGACY_VIDEO_ROOT = resolve(OUTPUT_DIR, 'videos');
+const QUICK_TEST_VIDEO_ROOT = resolve(OUTPUT_DIR, 'quick-test-videos');
 const QUICK_RUN_ROOT = resolve(OUTPUT_DIR, 'quick-test-runs');
 const RUNNER_SCRIPT = resolve(PROJECT_DIR, 'scripts', 'quick-test-runner.ts');
 const LEGACY_STATE_FILE = resolve(OUTPUT_DIR, 'quick-test-server.json');
 const LOG_FILE = resolve(OUTPUT_DIR, 'quick-test-server.log');
 const DEFAULT_PORT = 4173;
 const DEFAULT_HOST = '127.0.0.1';
+const MAX_CONCURRENT_AUTOMATIONS = Math.min(10, Math.max(1, Number.parseInt(process.env.QUICK_TEST_MAX_CONCURRENCY || '4', 10) || 4));
+const MAX_ERROR_OUTPUT_LENGTH = 64 * 1024;
+const COMPLETED_RUN_TTL_MS = 60 * 60 * 1000;
+const MAX_RETAINED_COMPLETED_RUNS = 50;
 const QUICK_TEST_RUNS = new Map();
+const AUTOMATION_QUEUE = [];
+const ACTIVE_CHILDREN = new Set();
+let activeAutomations = 0;
 
 const CONTENT_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -58,6 +66,31 @@ function parseOptions(args) {
 }
 
 function ensureOutputDir() { mkdirSync(OUTPUT_DIR, { recursive: true }); }
+function runDirectoryFor(runId) { return resolve(QUICK_RUN_ROOT, runId); }
+function runStateFileFor(runId) { return resolve(runDirectoryFor(runId), 'run.json'); }
+function persistRun(run) {
+  mkdirSync(runDirectoryFor(run.runId), { recursive: true });
+  writeFileSync(runStateFileFor(run.runId), JSON.stringify(run, null, 2));
+}
+function loadPersistedRuns() {
+  if (!existsSync(QUICK_RUN_ROOT)) return;
+  for (const entry of readdirSync(QUICK_RUN_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const run = JSON.parse(readFileSync(runStateFileFor(entry.name), 'utf8'));
+      if (!run?.runId || !Array.isArray(run.results)) continue;
+      if (run.status !== 'completed') {
+        run.results = run.results.map((result) => result.status === 'queued' || result.status === 'running'
+          ? { ...result, status: 'failed', successful: false, error: '快速测试服务停止，任务未完成' }
+          : result);
+        run.status = 'completed';
+        run.completedAt = Date.now();
+        persistRun(run);
+      }
+      QUICK_TEST_RUNS.set(run.runId, run);
+    } catch { /* 忽略未完成写入或旧格式的运行记录 */ }
+  }
+}
 function stateFileForPort(port) { return resolve(OUTPUT_DIR, `quick-test-server-${port}.json`); }
 function readState(port) {
   const files = [stateFileForPort(port)];
@@ -120,9 +153,12 @@ function safeWebPath(requestPath) {
 function safeVideoPath(requestPath) {
   let pathname;
   try { pathname = decodeURIComponent(requestPath.split('?')[0]); } catch { return null; }
-  if (!pathname.startsWith('/videos/')) return null;
-  const filePath = resolve(VIDEO_ROOT, `.${normalize(pathname.slice('/videos'.length))}`);
-  const relativePath = relative(VIDEO_ROOT, filePath);
+  const isQuickTestVideo = pathname.startsWith('/quick-test-videos/');
+  const videoRoot = isQuickTestVideo ? QUICK_TEST_VIDEO_ROOT : pathname.startsWith('/videos/') ? LEGACY_VIDEO_ROOT : null;
+  if (!videoRoot) return null;
+  const prefixLength = isQuickTestVideo ? '/quick-test-videos'.length : '/videos'.length;
+  const filePath = resolve(videoRoot, `.${normalize(pathname.slice(prefixLength))}`);
+  const relativePath = relative(videoRoot, filePath);
   if (!relativePath || relativePath.startsWith('..')) return null;
   return filePath;
 }
@@ -148,26 +184,68 @@ function requestBody(request) {
 function videoUrl(videoPath) {
   if (!videoPath) return '';
   const absolutePath = resolve(videoPath);
-  const relativePath = relative(VIDEO_ROOT, absolutePath);
+  const relativePath = relative(QUICK_TEST_VIDEO_ROOT, absolutePath);
   if (!relativePath || relativePath.startsWith('..')) return '';
-  return `/videos/${relativePath.split(/[/\\\\]/).map(encodeURIComponent).join('/')}`;
+  return `/quick-test-videos/${relativePath.split(/[/\\\\]/).map(encodeURIComponent).join('/')}`;
 }
 
-function runAutomation(index, targetUrl, runDirectory) {
+function drainAutomationQueue() {
+  while (activeAutomations < MAX_CONCURRENT_AUTOMATIONS && AUTOMATION_QUEUE.length > 0) {
+    const queued = AUTOMATION_QUEUE.shift();
+    activeAutomations += 1;
+    Promise.resolve()
+      .then(() => {
+        queued.onStart?.();
+        return queued.task();
+      })
+      .then(queued.resolve, queued.reject)
+      .finally(() => {
+        activeAutomations -= 1;
+        drainAutomationQueue();
+      });
+  }
+}
+
+function enqueueAutomation(task, onStart) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    AUTOMATION_QUEUE.push({ task, onStart, resolve: resolvePromise, reject: rejectPromise });
+    drainAutomationQueue();
+  });
+}
+
+function executeAutomation(index, targetUrl, runDirectory) {
   const resultFile = resolve(runDirectory, `result-${index}.json`);
   const command = process.platform === 'win32' ? resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx.cmd') : resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx');
   const startedAt = Date.now();
   return new Promise((resolvePromise) => {
-    const child = spawn(command, [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`], { cwd: PROJECT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`, `--output-dir=${QUICK_TEST_VIDEO_ROOT}`], { cwd: PROJECT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    ACTIVE_CHILDREN.add(child);
     let errorOutput = '';
-    child.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
-    child.on('error', (error) => resolvePromise({ index, successful: false, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: error.message }));
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolvePromise(result);
+    };
+    child.stderr.on('data', (chunk) => {
+      if (errorOutput.length >= MAX_ERROR_OUTPUT_LENGTH) return;
+      errorOutput += chunk.toString().slice(0, MAX_ERROR_OUTPUT_LENGTH - errorOutput.length);
+    });
+    child.on('error', (error) => {
+      ACTIVE_CHILDREN.delete(child);
+      finish({ index, successful: false, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: error.message });
+    });
     child.on('close', async (code) => {
+      ACTIVE_CHILDREN.delete(child);
       let result = null;
       try { result = JSON.parse(await readFile(resultFile, 'utf8')); } catch { /* runner may fail before writing a result */ }
-      resolvePromise({ index, successful: Boolean(result?.success) && code === 0, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: result?.error || errorOutput.trim() || (code === 0 ? '' : `自动化脚本退出码：${code}`), videoUrl: videoUrl(result?.videoPath), videoPath: result?.videoPath || '' });
+      finish({ index, successful: Boolean(result?.success) && code === 0, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: result?.error || errorOutput.trim() || (code === 0 ? '' : `自动化脚本退出码：${code}`), videoUrl: videoUrl(result?.videoPath), videoPath: result?.videoPath || '' });
     });
   });
+}
+
+function runAutomation(index, targetUrl, runDirectory, onStart) {
+  return enqueueAutomation(() => executeAutomation(index, targetUrl, runDirectory), onStart);
 }
 
 function createQuickTestRun({ targetUrl, total, concurrency }) {
@@ -182,6 +260,7 @@ function createQuickTestRun({ targetUrl, total, concurrency }) {
     results: Array.from({ length: total }, (_, offset) => ({ index: offset + 1, status: 'queued', successful: false, duration: '—', videoUrl: '', videoPath: '', error: '', deleted: false })),
   };
   QUICK_TEST_RUNS.set(run.runId, run);
+  persistRun(run);
   return run;
 }
 
@@ -201,35 +280,68 @@ function publicRun(run) {
     completedCount: completed,
     success,
     failed,
+    queue: {
+      active: activeAutomations,
+      waiting: AUTOMATION_QUEUE.length,
+      limit: MAX_CONCURRENT_AUTOMATIONS,
+    },
     results: allResults.map(({ videoPath, deleted, ...result }) => result),
   };
 }
 
 async function executeQuickTestRun(run) {
-  const runDirectory = resolve(QUICK_RUN_ROOT, run.runId);
+  const runDirectory = runDirectoryFor(run.runId);
   await mkdir(runDirectory, { recursive: true });
   try {
     for (let cursor = 0; cursor < run.total; cursor += run.concurrency) {
       const indexes = Array.from({ length: Math.min(run.concurrency, run.total - cursor) }, (_, offset) => cursor + offset + 1);
-      indexes.forEach((index) => { run.results[index - 1].status = 'running'; });
-      const batch = await Promise.all(indexes.map((index) => runAutomation(index, run.targetUrl, runDirectory)));
+      const batch = await Promise.all(indexes.map((index) => runAutomation(
+        index,
+        run.targetUrl,
+        runDirectory,
+        () => { run.results[index - 1].status = 'running'; },
+      )));
       batch.forEach((result) => {
         const resultIndex = result.index - 1;
         run.results[resultIndex] = { ...run.results[resultIndex], status: result.successful ? 'success' : 'failed', successful: result.successful, duration: result.duration, error: result.error || '', videoUrl: result.videoUrl || '', videoPath: result.videoPath || '' };
       });
+      persistRun(run);
     }
   } finally {
     run.status = 'completed';
     run.completedAt = Date.now();
+    persistRun(run);
+    cleanupCompletedRuns();
   }
 }
 
 function removeVideo(videoPath) {
   if (!videoPath) return;
   const absolutePath = resolve(videoPath);
-  const relativePath = relative(VIDEO_ROOT, absolutePath);
+  const relativePath = relative(QUICK_TEST_VIDEO_ROOT, absolutePath);
   if (!relativePath || relativePath.startsWith('..')) throw new Error('视频路径不在允许的输出目录内');
   if (existsSync(absolutePath)) unlinkSync(absolutePath);
+}
+
+async function removeRunArtifacts(run) {
+  for (const result of run.results) {
+    try { removeVideo(result.videoPath); } catch (error) { console.error(`快速测试视频清理失败：${error.message || error}`); }
+  }
+  await rm(resolve(QUICK_RUN_ROOT, run.runId), { recursive: true, force: true });
+}
+
+function cleanupCompletedRuns() {
+  const completedRuns = [...QUICK_TEST_RUNS.values()]
+    .filter((run) => run.status === 'completed')
+    .sort((left, right) => (left.completedAt || 0) - (right.completedAt || 0));
+  const cutoff = Date.now() - COMPLETED_RUN_TTL_MS;
+  const expired = completedRuns.filter((run) => (run.completedAt || 0) <= cutoff);
+  const overflow = completedRuns.slice(0, Math.max(0, completedRuns.length - MAX_RETAINED_COMPLETED_RUNS));
+  const toRemove = new Set([...expired, ...overflow]);
+  for (const run of toRemove) {
+    if (!QUICK_TEST_RUNS.delete(run.runId)) continue;
+    void removeRunArtifacts(run).catch((error) => console.error(`快速测试运行目录清理失败：${error.message || error}`));
+  }
 }
 
 async function createQuickTest(request, response) {
@@ -254,11 +366,12 @@ async function createQuickTest(request, response) {
     });
     run.status = 'completed';
     run.completedAt = Date.now();
+    persistRun(run);
   });
   sendJson(response, 202, publicRun(run));
 }
 
-async function updateQuickTestResult(request, response, runId, indexText, deleteVideoOnly) {
+async function updateQuickTestResult(request, response, runId, indexText) {
   const run = QUICK_TEST_RUNS.get(runId);
   const index = Number.parseInt(indexText, 10);
   if (!run) { sendJson(response, 404, { error: '测试记录不存在或服务已重启' }); return; }
@@ -270,20 +383,20 @@ async function updateQuickTestResult(request, response, runId, indexText, delete
     removeVideo(result.videoPath);
     result.videoPath = '';
     result.videoUrl = '';
-    if (!deleteVideoOnly) result.deleted = true;
+    result.deleted = true;
+    persistRun(run);
     sendJson(response, 200, publicRun(run));
   } catch (error) {
-    sendJson(response, 500, { error: error.message || '删除视频失败' });
+    sendJson(response, 500, { error: error.message || '删除记录失败' });
   }
 }
 
 async function handleQuickTestApi(request, response) {
+  cleanupCompletedRuns();
   const pathname = new URL(request.url || '/', 'http://quick-test.local').pathname;
   if (pathname === '/api/quick-test/run') { await createQuickTest(request, response); return; }
-  const videoMatch = pathname.match(/^\/api\/quick-test\/run\/([^/]+)\/results\/(\d+)\/video$/);
-  if (videoMatch && request.method === 'DELETE') { await updateQuickTestResult(request, response, videoMatch[1], videoMatch[2], true); return; }
   const resultMatch = pathname.match(/^\/api\/quick-test\/run\/([^/]+)\/results\/(\d+)$/);
-  if (resultMatch && request.method === 'DELETE') { await updateQuickTestResult(request, response, resultMatch[1], resultMatch[2], false); return; }
+  if (resultMatch && request.method === 'DELETE') { await updateQuickTestResult(request, response, resultMatch[1], resultMatch[2]); return; }
   const runMatch = pathname.match(/^\/api\/quick-test\/run\/([^/]+)$/);
   if (runMatch && request.method === 'GET') {
     const run = QUICK_TEST_RUNS.get(runMatch[1]);
@@ -314,6 +427,7 @@ function serveVideo(filePath, request, response) {
 
 function serveCommand(options) {
   if (!existsSync(WEB_ROOT)) throw new Error(`找不到前端目录：${WEB_ROOT}`);
+  loadPersistedRuns();
   const server = createServer((request, response) => {
     if ((request.url || '').split('?')[0] === '/api/quick-test/health') { sendJson(response, 200, { service: 'quick-test-server', pid: process.pid, port: options.port }); return; }
     if ((request.url || '').split('?')[0].startsWith('/api/quick-test/run')) { handleQuickTestApi(request, response).catch((error) => sendJson(response, 500, { error: error.message || '自动化测试执行失败' })); return; }
@@ -336,7 +450,30 @@ function serveCommand(options) {
   });
 
   const cleanup = () => { const state = readState(options.port); if (state?.pid === process.pid) removeState(options.port); };
-  const shutdown = () => server.close(() => { cleanup(); process.exit(0); });
+  let shuttingDown = false;
+  let serverClosed = false;
+  const finishShutdown = () => {
+    if (serverClosed && ACTIVE_CHILDREN.size === 0) {
+      cleanup();
+      process.exit(0);
+    }
+  };
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    for (const child of ACTIVE_CHILDREN) {
+      child.once('close', finishShutdown);
+      try { child.kill('SIGTERM'); } catch { /* best effort cleanup */ }
+    }
+    server.close(() => { serverClosed = true; finishShutdown(); });
+    setTimeout(() => {
+      for (const child of ACTIVE_CHILDREN) {
+        try { child.kill('SIGKILL'); } catch { /* best effort cleanup */ }
+      }
+      cleanup();
+      process.exit(1);
+    }, 3_000).unref();
+  };
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
   server.on('error', (error) => { console.error(`快速测试服务启动失败：${error.message}`); cleanup(); process.exit(1); });
   server.listen(options.port, options.host, () => { writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() }); console.log(`快速测试页面已启动：http://${displayHost(options.host)}:${options.port}/web/`); });

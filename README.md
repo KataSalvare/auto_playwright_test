@@ -253,4 +253,4 @@ scripts\start-quick-test.bat stop
 - `presets`：首单、非首单等流程预设，以及预设要附带的额外参数
 - `parameters`：页面参数字典及必填/可选标记
 
-页面不会上传业务数据；链接和测试参数仅保存在当前浏览器标签页。测试运行状态会临时写入 `sessionStorage`，刷新后可恢复结果记录和执行中的轮询，开始新测试后会替换当前结果。点击开始测试后，控制台会调用现有的 `runOrderFlow` 自动化脚本，按并发批次执行；结果中的成功视频来自 `output/videos/success`，由快速测试服务通过 `/videos/...` 提供本地播放。
+页面不会上传业务数据；链接和测试参数仅保存在当前浏览器。当前运行记录会写入 `localStorage`，刷新页面或重新打开浏览器后仍可恢复；服务端还会将运行记录写入 `output/quick-test-runs/<runId>/run.json`，重启服务后可以继续查看已完成记录。开始新测试后会替换当前结果。点击开始测试后，控制台会调用现有的 `runOrderFlow` 自动化脚本，按并发批次执行；快速测试页面生成的成功视频独立保存在 `output/quick-test-videos/success`，由快速测试服务通过 `/quick-test-videos/...` 提供本地播放，不会与命令行 `output/videos` 混用。

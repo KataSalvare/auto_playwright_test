@@ -95,13 +95,9 @@ body { background: var(--bg); color: var(--text); font-size: 15px; }
 .result-status.is-running .status-dot { background: #4d91dd; box-shadow: 0 0 0 3px rgba(77, 145, 221, .14); }
 .run-status.pending { color: #2f78d2; }
 .run-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; min-width: 0; }
-.run-actions .video-link, .run-actions .video-download, .run-actions .video-delete, .run-actions .record-delete { min-height: 24px; padding: 2px 5px; border: 0; background: transparent; font: inherit; font-size: 10px; white-space: nowrap; }
-.run-actions .video-link, .run-actions .video-download { color: #3c8063; }
-.run-actions .video-download { text-decoration: none; }
-.run-actions .video-link:hover, .run-actions .video-download:hover { color: #138e5c; }
-.run-actions .video-delete, .run-actions .record-delete { color: #bd5961; cursor: pointer; }
-.run-actions .video-delete:hover, .run-actions .record-delete:hover { color: #a93640; background: #fff1f2; }
-.run-actions .video-link.is-disabled { color: #8a96a3; cursor: default; }
+.run-actions .record-delete { min-height: 24px; padding: 2px 5px; border: 0; background: transparent; color: #bd5961; cursor: pointer; font: inherit; font-size: 10px; white-space: nowrap; }
+.run-actions .record-delete:hover { color: #a93640; background: #fff1f2; }
+.run-action-empty { color: #8a96a3; font-size: 10px; }
 @media (max-width: 560px) { .run-actions { grid-column: 2 / -1; justify-content: flex-start; padding-bottom: 8px; } }
 
 /* Keep advanced link parameters in a compact modal so Step 1 stays above the fold. */
