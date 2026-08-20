@@ -193,11 +193,42 @@ async function pressNameSequentially(locator: Locator, value: string, strategy: 
   }
 }
 
-async function closeKeyboardIfVisible(page: Page) {
+async function closeKeyboardIfVisible(page: Page): Promise<boolean> {
   const close = getKeyboardKey(page, 'keyboard_close');
-  if (await close.isVisible().catch(() => false)) {
-    await close.click({ timeout: 1_500 }).catch(() => undefined);
+  if (!(await close.isVisible().catch(() => false))) return false;
+  await close.click({ timeout: 1_500 }).catch(() => undefined);
+  return true;
+}
+
+/**
+ * 错误手机号达到 11 位并收起键盘后，页面会先弹出手机号确认层。
+ * 先同意关闭该弹窗，才能重新聚焦手机号输入框进行修正。
+ */
+async function clickPhoneConfirmationIfVisible(
+  page: Page,
+  wait: WaitFn,
+  random: () => number,
+  timeoutMs = 5_000,
+) {
+  const continueButton = byTestId(page, LOCATORS.phoneContinue);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await continueButton.isVisible().catch(() => false)) {
+      // 按原本步骤 2 的真人化节奏，弹窗出现后先停顿 1–2 秒再点击。
+      await wait(randomInteger(random, 1_000, 2_000));
+      try {
+        await continueButton.click({ timeout: 5_000 });
+      } catch {
+        // 弹窗刚完成动画时，普通点击可能被蒙层拦截；按钮仍在弹窗内，可安全重试 force click。
+        await continueButton.click({ timeout: 5_000, force: true });
+      }
+      return true;
+    }
+    await wait(100);
   }
+
+  return false;
 }
 
 async function focusVirtualInputAtEnd(page: Page, inputTestId: LocatorTestId) {
@@ -382,7 +413,12 @@ export async function fillPhone({
   const wrong = mutateValue(value, random);
   await typeWithVirtualKeyboard(page, LOCATORS.phoneInput, wrong.value, strategy, random, wait);
   await closeKeyboardIfVisible(page);
-  await wait(thinkingPause(random));
+  // 错误手机号必须先确认，确认后页面已经进入实名区域，再等待原逻辑的 2–3 秒。
+  const confirmationHandled = await clickPhoneConfirmationIfVisible(page, wait, random);
+  if (!confirmationHandled) {
+    throw new Error('错误手机号输入后未找到手机号确认弹窗的同意并继续按钮');
+  }
+  await wait(randomInteger(random, 2_000, 3_000));
   await focusVirtualInputAtEnd(page, LOCATORS.phoneInput);
   await wait(inputFocusPause(
     random,
@@ -398,6 +434,8 @@ export async function fillPhone({
     await wait(pauseRange(random));
   }
   await closeKeyboardIfVisible(page);
+  // 手机号修正完成后，停顿 1 秒再交给外层点击姓名输入框。
+  await wait(1_000);
   return { strategy: 'error-corrected' as const, corrected: true };
 }
 

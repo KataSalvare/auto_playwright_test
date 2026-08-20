@@ -23,7 +23,7 @@ const firstOrderDirectPathChance = 0.8;
 const firstOrderAgreementOnlyPathChance = 0.15;
 const firstOrderPageBrowseMinMs = 4_000;
 const firstOrderPageBrowseMaxMs = 12_000;
-const agreementToPreviewDelayMs = 500;
+const agreementToButtonDelayMs = 1_000;
 const repeatOrderDirectPathChance = 0.8;
 const repeatOrderAgreementToButtonMinMs = 1_000;
 const repeatOrderAgreementToButtonMaxMs = 2_000;
@@ -442,23 +442,28 @@ async function runFirstOrder(
   await waitConfigured(random, 2_000, 5_000); 
   // 步骤 1：输入手机号。
   mark('首单步骤 1：输入手机号');
-  await fillPhone({
+  const phoneResult = await fillPhone({
     page,
     value: order.phone,
     seed: options.seed,
     inputStrategy: options.inputStrategy,
     errorChance: options.phoneErrorChance,
   });
-  await pauseAfterStep(random);
-  // 步骤 2：如果出现手机号确认弹窗，点击“同意并继续”。
-  mark('首单步骤 2：处理手机号确认弹窗');
-  await clickIfAppears(page, LOCATORS.phoneContinue);
-  await pauseAfterStep(random);
+  if (phoneResult.strategy === 'error-corrected') {
+    // 错误手机号分支已在 fillPhone 内完成：确认弹窗、等待 2–3 秒、手机号修正和修正后 1 秒停顿。
+    mark('首单步骤 2–3：错误手机号已确认并修正，直接进入姓名输入');
+  } else {
+    await pauseAfterStep(random);
+    // 步骤 2：如果出现手机号确认弹窗，点击“同意并继续”。
+    mark('首单步骤 2：处理手机号确认弹窗');
+    await clickIfAppears(page, LOCATORS.phoneContinue);
+    await pauseAfterStep(random);
 
-  // 步骤 3：等待页面切换到实名信息区域。
-  mark('首单步骤 3：等待页面进入实名信息');
-  await waitConfigured(random, 2_000, 3_000);
-  await pauseAfterStep(random);
+    // 步骤 3：等待页面切换到实名信息区域。
+    mark('首单步骤 3：等待页面进入实名信息');
+    await waitConfigured(random, 2_000, 3_000);
+    await pauseAfterStep(random);
+  }
 
   // 步骤 4：输入姓名。
   mark('首单步骤 4：输入姓名');
@@ -517,13 +522,16 @@ async function runFirstOrder(
     );
     mark('首单步骤 6：勾选同意协议');
     await ensureAgreementChecked(page);
-    mark('首单步骤 6：协议勾选完成，等待 0.5 秒后开始预览');
-    await sleep(agreementToPreviewDelayMs);
+    mark('首单步骤 6：协议勾选完成，等待 1 秒');
+    await sleep(agreementToButtonDelayMs);
 
-    // 协议勾选完成后，才开始步骤 7–8 的 4–12 秒整体预览预算。
-    const browseSession = startFirstOrderPageBrowse(random);
+    if (preButtonPath === 'agreement-only') {
+      // 协议勾选方案不再预览页面，等待 0.5 秒后直接进入登录/完善信息。
+      mark('首单步骤 7–8：协议勾选完成，跳过预览并直接点击按钮');
+    } else {
+      // 完整浏览方案才启动步骤 7–8 的 4–12 秒整体预览预算。
+      const browseSession = startFirstOrderPageBrowse(random);
 
-    if (preButtonPath === 'full') {
       // 方案 3：继续浏览，再依次选择社保和续保。
       mark('首单步骤 7：继续浏览并寻找社保选项');
       await browseUntilVisible(
@@ -560,12 +568,8 @@ async function runFirstOrder(
         '选择续保状态',
       );
       await pauseAfterStep(random);
-    } else {
-      // 方案 2：勾选协议后直接点击按钮，跳过社保和续保。
-      mark('首单步骤 7–8：浏览结束，跳过社保和续保');
+      await finishFirstOrderPageBrowse(browseSession, '首单步骤 6–8');
     }
-
-    await finishFirstOrderPageBrowse(browseSession, '首单步骤 6–8');
   }
 
   // 步骤 9：点击“点此登录/完善信息”进入保障流程。
