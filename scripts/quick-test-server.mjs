@@ -13,7 +13,7 @@
  */
 import { createServer, request as httpRequest } from 'node:http';
 import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -341,6 +341,34 @@ function removeVideo(videoPath) {
   if (existsSync(absolutePath)) unlinkSync(absolutePath);
 }
 
+async function removeRunArtifacts(run) {
+  for (const result of run.results) {
+    try {
+      removeVideo(result.videoPath);
+    } catch (error) {
+      console.error(`删除快速测试视频失败（${run.runId}）：${error.message}`);
+    }
+  }
+  await rm(runDirectoryFor(run.runId), { recursive: true, force: true });
+}
+
+async function deleteAllQuickTestRuns(request, response) {
+  if (request.method !== 'DELETE') { sendJson(response, 405, { error: '只支持 DELETE 请求' }); return; }
+  const runs = [...QUICK_TEST_RUNS.values()];
+  const activeRuns = runs.filter((run) => run.status !== 'completed');
+  if (activeRuns.length > 0) {
+    sendJson(response, 409, { error: '执行中的测试完成后才能全部删除' });
+    return;
+  }
+  try {
+    await Promise.all(runs.map((run) => removeRunArtifacts(run)));
+    QUICK_TEST_RUNS.clear();
+    sendJson(response, 200, { runs: [] });
+  } catch (error) {
+    sendJson(response, 500, { error: error.message || '全部删除失败' });
+  }
+}
+
 async function createQuickTest(request, response) {
   if (request.method !== 'POST') { sendJson(response, 405, { error: '只支持 POST 请求' }); return; }
   let payload;
@@ -390,6 +418,10 @@ async function updateQuickTestResult(request, response, runId, indexText) {
 
 async function handleQuickTestApi(request, response) {
   const pathname = new URL(request.url || '/', 'http://quick-test.local').pathname;
+  if (pathname === '/api/quick-test/runs' && request.method === 'DELETE') {
+    await deleteAllQuickTestRuns(request, response);
+    return;
+  }
   if (pathname === '/api/quick-test/runs' && request.method === 'GET') {
     const runs = [...QUICK_TEST_RUNS.values()]
       .sort((left, right) => (right.startedAt || 0) - (left.startedAt || 0))

@@ -90,6 +90,12 @@ body { background: var(--bg); color: var(--text); font-size: 15px; }
 .execution-panel.is-locked, .results-panel.is-locked { border-color: #dfe5eb; }.execution-panel.is-locked .panel-heading, .results-panel.is-locked .panel-heading { opacity: .72; }.locked-state { color: #748292; font-size: 12px; }.lock-icon { color: #83909c; border-color: #cdd7e0; }.execution-field, .run-plan { border-color: #dce3ea; background: #f8fafc; }.execution-field > span { color: #445363; font-size: 13px; }.execution-field small { color: #778594; font-size: 11px; }.number-input { border-color: #d5dee7; background: #ffffff; }.number-input button { color: #6d7c8b; }.number-input button:hover { color: #138e5c; background: #edf9f3; }.number-input input { color: #24313e; }.run-plan strong { color: #263440; }.run-plan > span:last-child { color: #5e856f; }.run-progress { border-color: #c8dced; background: #f2f7fd; }.progress-head { color: #526a84; }.progress-track { background: #dce9f6; }.metric-card { border-color: #dce3ea; background: #f8fafc; }.metric-card span { color: #778493; }.metric-card strong { color: #263440; }.metric-card small { color: #7a8794; }.run-table { border-color: #dfe6ed; }.run-row { border-bottom-color: #e8edf2; }.video-link { color: #3c8063; }.video-link.is-disabled { color: #8a96a3; }.video-card { color: #263440; border-color: #dce3ea; background: #f8fafc; }.video-card:hover { border-color: #9bceb1; background: #f1faf5; }.video-thumb { color: #159a63; background: #ddf5e7; }.video-card small { color: #768493; }.video-arrow { color: #4d896d; }.modal-card, .video-modal-card { border-color: #d2dce5; background: #ffffff; }.modal-header { border-bottom-color: #e6ebf0; }.modal-header h2 { color: #1a2631; }.modal-header p { color: #748292; }.modal-footer { color: #7b8997; border-top-color: #e6ebf0; }.video-player-shell { background: #eef2f6; }
 @media (max-width: 1180px) { .main-content { display: block; }.workflow-panel#step1, .workflow-panel#step4 { height: auto; } }
 
+/* Compact the top workflow rhythm so the three-column content starts earlier. */
+.main-content { row-gap: 14px; }
+.flow-rail { margin: 10px 0 0; }
+.workflow-panel { margin-top: 0; }
+@media (max-width: 720px) { .flow-rail { margin: 8px 0 0; } }
+
 /* Keep the running status consistent with the light UI. */
 .result-status.is-running { color: #276dbb; border-color: #c1d7ef; background: #f0f6fd; }
 .result-status.is-running .status-dot { background: #4d91dd; box-shadow: 0 0 0 3px rgba(77, 145, 221, .14); }
@@ -122,3 +128,12 @@ body { background: var(--bg); color: var(--text); font-size: 15px; }
 .advanced-modal-card .advanced-fields { padding: 0; }
 .modal-footer-actions { display: flex; align-items: center; gap: 9px; }
 @media (max-width: 560px) { .advanced-modal-body { padding: 16px; }.advanced-modal-card .form-grid { grid-template-columns: 1fr; } }
+
+/* Paginate execution groups so a long history stays compact and scannable. */
+.result-head-actions { display: flex; align-items: center; gap: 8px; }
+.danger-button { color: #b64c56; border-color: #efc8cc; background: #fffafb; }
+.danger-button:hover { color: #9f3843; border-color: #e5aeb4; background: #fff1f2; }
+.danger-button:disabled, .secondary-button:disabled { cursor: not-allowed; opacity: .48; transform: none; }
+.history-pagination { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 14px; color: #718092; font: 11px var(--mono); }
+.history-pagination .small-button { min-width: 58px; }
+@media (max-width: 560px) { .result-section-head { align-items: flex-start; gap: 10px; }.result-head-actions { flex-wrap: wrap; justify-content: flex-end; }.history-pagination { margin-bottom: 2px; } }
