@@ -221,14 +221,16 @@ curl 'http://远程电脑IP:4173/api/automation/jobs/job-1787210048192-j91x7kz' 
 当 `videoUrl` 返回：
 
 ```text
-/quick-test-videos/订单号-success-时间戳.mp4
+/videos/订单号-success-时间戳.mp4
 ```
 
 完整地址为：
 
 ```text
-http://远程电脑IP:4173/quick-test-videos/订单号-success-时间戳.mp4
+http://远程电脑IP:4173/videos/订单号-success-时间戳.mp4
 ```
+
+API 任务生成的视频实际保存在项目目录下的 `output/videos/`：成功视频位于 `output/videos/success/`，失败视频位于 `output/videos/failed/`。前端快速测试页面仍然使用独立的 `output/quick-test-videos/` 目录。
 
 ## 6. 错误响应
 

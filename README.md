@@ -61,7 +61,7 @@ curl 'http://远程电脑IP:4173/api/automation/jobs/返回的jobId' \
   -H 'Authorization: Bearer 替换为你的APIKey'
 ```
 
-请求约束：一次最多 50 条链接，并发数为 1–10；服务默认最多同时运行 4 个浏览器任务，可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整。每条链接必须包含 `temp-lp-jing` 和现有脚本要求的必要参数。`dryRun: true` 只做链接校验，不启动浏览器。成功结果中的 `videoUrl` 是相对于 API 服务地址的路径，例如 `/quick-test-videos/...mp4`，服务端拼接 `http://远程电脑IP:4173` 即可访问。
+请求约束：一次最多 50 条链接，并发数为 1–10；服务默认最多同时运行 4 个浏览器任务，可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整。每条链接必须包含 `temp-lp-jing` 和现有脚本要求的必要参数。`dryRun: true` 只做链接校验，不启动浏览器。API 成功结果中的 `videoUrl` 是相对于 API 服务地址的路径，例如 `/videos/...mp4`，服务端拼接 `http://远程电脑IP:4173` 即可访问；API 视频文件保存到 `output/videos/`。
 
 远程部署至少需要先执行：
 

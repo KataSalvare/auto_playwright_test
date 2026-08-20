@@ -266,12 +266,12 @@ function requestBody(request) {
   });
 }
 
-function videoUrl(videoPath) {
+function videoUrl(videoPath, videoRoot, urlPrefix) {
   if (!videoPath) return '';
   const absolutePath = resolve(videoPath);
-  const relativePath = relative(QUICK_TEST_VIDEO_ROOT, absolutePath);
+  const relativePath = relative(videoRoot, absolutePath);
   if (!relativePath || relativePath.startsWith('..')) return '';
-  return `/quick-test-videos/${relativePath.split(/[/\\\\]/).map(encodeURIComponent).join('/')}`;
+  return `${urlPrefix}/${relativePath.split(/[/\\\\]/).map(encodeURIComponent).join('/')}`;
 }
 
 function drainAutomationQueue() {
@@ -298,7 +298,17 @@ function enqueueAutomation(task, onStart) {
   });
 }
 
-function executeAutomation(index, targetUrl, runDirectory, { dryRun = false } = {}) {
+function executeAutomation(
+  index,
+  targetUrl,
+  runDirectory,
+  {
+    dryRun = false,
+    outputDir = QUICK_TEST_VIDEO_ROOT,
+    videoRoot = QUICK_TEST_VIDEO_ROOT,
+    videoUrlPrefix = '/quick-test-videos',
+  } = {},
+) {
   const resultFile = resolve(runDirectory, `result-${index}.json`);
   const command = process.platform === 'win32' ? resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx.cmd') : resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx');
   const startedAt = Date.now();
@@ -306,7 +316,7 @@ function executeAutomation(index, targetUrl, runDirectory, { dryRun = false } = 
   const label = `快速测试 ${runId} / 第 ${index} 项`;
   appendServerLog('INFO', `${label} 开始执行`);
   return new Promise((resolvePromise) => {
-    const childArguments = [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`, `--output-dir=${QUICK_TEST_VIDEO_ROOT}`];
+    const childArguments = [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`, `--output-dir=${outputDir}`];
     if (dryRun) childArguments.push('--dry-run');
     const child = spawn(command, childArguments, {
       cwd: PROJECT_DIR,
@@ -336,7 +346,7 @@ function executeAutomation(index, targetUrl, runDirectory, { dryRun = false } = 
       ACTIVE_CHILDREN.delete(child);
       let result = null;
       try { result = JSON.parse(await readFile(resultFile, 'utf8')); } catch { /* runner may fail before writing a result */ }
-      finish({ index, successful: Boolean(result?.success) && code === 0, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: result?.error || errorOutput.trim() || (code === 0 ? '' : `自动化脚本退出码：${code}`), videoUrl: videoUrl(result?.videoPath), videoPath: result?.videoPath || '' });
+      finish({ index, successful: Boolean(result?.success) && code === 0, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: result?.error || errorOutput.trim() || (code === 0 ? '' : `自动化脚本退出码：${code}`), videoUrl: videoUrl(result?.videoPath, videoRoot, videoUrlPrefix), videoPath: result?.videoPath || '' });
     });
   });
 }
@@ -524,7 +534,12 @@ async function executeAutomationJob(job) {
               job.results[index].status = 'running';
               persistAutomationJob(job);
             },
-            { dryRun: job.dryRun },
+            {
+              dryRun: job.dryRun,
+              outputDir: LEGACY_VIDEO_ROOT,
+              videoRoot: LEGACY_VIDEO_ROOT,
+              videoUrlPrefix: '/videos',
+            },
           );
         } catch (error) {
           result = {
