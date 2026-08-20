@@ -274,6 +274,16 @@ function videoUrl(videoPath, videoRoot, urlPrefix) {
   return `${urlPrefix}/${relativePath.split(/[/\\\\]/).map(encodeURIComponent).join('/')}`;
 }
 
+function videoUrlForAnyVideoPath(videoPath) {
+  if (!videoPath) return '';
+  const absolutePath = resolve(videoPath);
+  const legacyRelativePath = relative(LEGACY_VIDEO_ROOT, absolutePath);
+  if (legacyRelativePath && !legacyRelativePath.startsWith('..')) {
+    return videoUrl(absolutePath, LEGACY_VIDEO_ROOT, '/videos');
+  }
+  return videoUrl(absolutePath, QUICK_TEST_VIDEO_ROOT, '/quick-test-videos');
+}
+
 function drainAutomationQueue() {
   while (activeAutomations < MAX_CONCURRENT_AUTOMATIONS && AUTOMATION_QUEUE.length > 0) {
     const queued = AUTOMATION_QUEUE.shift();
@@ -509,7 +519,11 @@ function publicAutomationJob(job) {
       waiting: AUTOMATION_QUEUE.length,
       limit: MAX_CONCURRENT_AUTOMATIONS,
     },
-    results: job.results.map(({ videoPath, ...result }) => result),
+    results: job.results.map((result) => {
+      const videoUrl = result.videoUrl || videoUrlForAnyVideoPath(result.videoPath);
+      const { videoPath, ...publicResult } = result;
+      return { ...publicResult, videoUrl };
+    }),
   };
 }
 
