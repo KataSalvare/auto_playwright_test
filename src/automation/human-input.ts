@@ -118,13 +118,23 @@ async function clickKeyboardKey(page: Page, key: KeyboardKey) {
   await getKeyboardKey(page, key).click({ delay });
 }
 
-function mutateValue(value: string, random: () => number): { value: string; index: number } {
-  const index = randomInteger(random, 0, value.length - 1);
+function mutateValue(
+  value: string,
+  random: () => number,
+  minIndex = 0,
+): { value: string; index: number } {
+  const index = randomInteger(random, minIndex, value.length - 1);
   const original = value[index];
   const replacement = original.toUpperCase() === 'X'
     ? '0'
     : String((Number(original) + randomInteger(random, 1, 9)) % 10);
   return { value: `${value.slice(0, index)}${replacement}${value.slice(index + 1)}`, index };
+}
+
+/** 手机号前两位固定正确，只允许在后 9 位制造错误。 */
+export function mutatePhoneValue(value: string, random: () => number): { value: string; index: number } {
+  if (value.length < 3) throw new Error('手机号至少需要 3 位才能保留前两位正确');
+  return mutateValue(value, random, 2);
 }
 
 async function pressSequentially(locator: Locator, value: string, strategy: InputStrategy, wait: WaitFn, random: () => number) {
@@ -410,7 +420,7 @@ export async function fillPhone({
     return { strategy: 'correct' as const, corrected: false };
   }
 
-  const wrong = mutateValue(value, random);
+  const wrong = mutatePhoneValue(value, random);
   await typeWithVirtualKeyboard(page, LOCATORS.phoneInput, wrong.value, strategy, random, wait);
   await closeKeyboardIfVisible(page);
   // 错误手机号必须先确认，确认后页面已经进入实名区域，再等待原逻辑的 2–3 秒。

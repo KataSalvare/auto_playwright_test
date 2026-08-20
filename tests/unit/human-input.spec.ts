@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { fillIdentity, fillPhone } from '../../src/automation/human-input';
+import { fillIdentity, fillPhone, mutatePhoneValue } from '../../src/automation/human-input';
 import { KEYBOARD_KEYS } from '../../src/automation/locators';
+import { createSeededRandom } from '../../src/automation/random';
 
 function createVirtualKeyboardPage(pageOptions: {
   keyboardVisible?: boolean;
@@ -135,6 +136,18 @@ test('手机号错误输入后从字段末尾开始删除修正', async () => {
     testId: 'phone_input',
     position: { x: 98, y: 20 },
   });
+});
+
+test('手机号错误只发生在后 9 位，前两位始终正确', async () => {
+  const phone = '15900000000';
+
+  for (let seed = 1; seed <= 100; seed += 1) {
+    const wrong = mutatePhoneValue(phone, createSeededRandom(seed));
+    expect(wrong.index, `手机号错误位置 seed=${seed}`).toBeGreaterThanOrEqual(2);
+    expect(wrong.index, `手机号错误位置 seed=${seed}`).toBeLessThan(phone.length);
+    expect(wrong.value.slice(0, 2)).toBe(phone.slice(0, 2));
+    expect(wrong.value).not.toBe(phone);
+  }
 });
 
 test('手机号错误输入后先同意关闭弹窗，再继续修正手机号', async () => {
