@@ -13,6 +13,67 @@
 
 快速测试页面和命令行自动化使用同一套 `runOrderFlow` 核心流程；两者的区别只是入口和结果展示方式。
 
+## 远程批量 API
+
+项目内置 HTTP API，服务端可以一次提交多条业务链接。接口是异步的：提交后立即返回 `jobId`，再通过查询接口获取每条链接的执行状态。
+
+完整接口文档见：[docs/automation-api.md](/Users/much/代码/仿朝发可回溯/docs/automation-api.md)。
+
+启动前先在远程电脑设置 API Key（不要把 Key 写进代码或提交到 Git）：
+
+```bash
+export AUTOMATION_API_KEY='替换为一段足够长的随机字符串'
+npm run api:start
+```
+
+服务默认监听 `0.0.0.0:4173`。如需修改端口或监听地址：
+
+```bash
+node scripts/quick-test-server.mjs start --host 0.0.0.0 --port 4173
+```
+
+健康检查：
+
+```bash
+curl http://远程电脑IP:4173/api/automation/health
+```
+
+提交批量任务：
+
+```bash
+curl -X POST 'http://远程电脑IP:4173/api/automation/jobs' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer 替换为你的APIKey' \
+  -d '{
+    "concurrency": 2,
+    "dryRun": false,
+    "links": [
+      {"name": "订单1", "url": "https://your-domain.example/temp-lp-jing/index/...?dingdan=...&shouji=...&xingming=...&shenfen=...&shebao=1&xubao=1&shunxu=1"},
+      {"name": "订单2", "url": "https://your-domain.example/temp-lp-jing/index/...?dingdan=...&shouji=...&xingming=...&shenfen=...&shebao=1&xubao=1&shunxu=2"}
+    ]
+  }'
+```
+
+查询任务：
+
+```bash
+curl 'http://远程电脑IP:4173/api/automation/jobs/返回的jobId' \
+  -H 'Authorization: Bearer 替换为你的APIKey'
+```
+
+请求约束：一次最多 50 条链接，并发数为 1–10；服务默认最多同时运行 4 个浏览器任务，可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整。每条链接必须包含 `temp-lp-jing` 和现有脚本要求的必要参数。`dryRun: true` 只做链接校验，不启动浏览器。成功结果中的 `videoUrl` 是相对于 API 服务地址的路径，例如 `/quick-test-videos/...mp4`，服务端拼接 `http://远程电脑IP:4173` 即可访问。
+
+远程部署至少需要先执行：
+
+```bash
+npm install
+npm run test:install
+export AUTOMATION_API_KEY='替换为一段足够长的随机字符串'
+npm run api:start
+```
+
+建议在生产环境通过防火墙或反向代理限制访问来源，并使用 HTTPS；业务链接包含手机号、姓名和身份证参数，API 请求和日志都应按敏感数据处理。
+
 ## 安装
 
 ```bash

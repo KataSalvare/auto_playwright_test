@@ -30,10 +30,15 @@ async function main() {
   const [targetUrl] = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
   const resultFile = optionValue('--result-file');
   const outputDir = resolve(optionValue('--output-dir') || 'output/quick-test-videos');
+  const dryRun = process.argv.includes('--dry-run');
   if (!targetUrl) throw new Error('快速测试执行器缺少业务链接');
 
   try {
     const order = parseOrderUrl(targetUrl);
+    if (dryRun) {
+      await writeResult(resultFile, { success: true });
+      return;
+    }
     const result = await runOrderFlow(order, {
       seed: Number(optionValue('--seed')) || Date.now(),
       product: 'basic',

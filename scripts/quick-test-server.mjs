@@ -17,6 +17,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 
 const SCRIPT_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -26,6 +27,7 @@ const OUTPUT_DIR = resolve(PROJECT_DIR, 'output');
 const LEGACY_VIDEO_ROOT = resolve(OUTPUT_DIR, 'videos');
 const QUICK_TEST_VIDEO_ROOT = resolve(OUTPUT_DIR, 'quick-test-videos');
 const QUICK_RUN_ROOT = resolve(OUTPUT_DIR, 'quick-test-runs');
+const AUTOMATION_JOB_ROOT = resolve(OUTPUT_DIR, 'automation-jobs');
 const RUNNER_SCRIPT = resolve(PROJECT_DIR, 'scripts', 'quick-test-runner.ts');
 const LEGACY_STATE_FILE = resolve(OUTPUT_DIR, 'quick-test-server.json');
 const LOG_FILE = resolve(OUTPUT_DIR, 'quick-test-server.log');
@@ -35,6 +37,7 @@ const DEFAULT_HOST = '0.0.0.0';
 const MAX_CONCURRENT_AUTOMATIONS = Math.min(10, Math.max(1, Number.parseInt(process.env.QUICK_TEST_MAX_CONCURRENCY || '4', 10) || 4));
 const MAX_ERROR_OUTPUT_LENGTH = 64 * 1024;
 const QUICK_TEST_RUNS = new Map();
+const AUTOMATION_JOBS = new Map();
 const AUTOMATION_QUEUE = [];
 const ACTIVE_CHILDREN = new Set();
 let activeAutomations = 0;
@@ -51,6 +54,36 @@ const CONTENT_TYPES = {
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
 };
+
+const AUTOMATION_API_KEY = process.env.AUTOMATION_API_KEY || '';
+const MAX_AUTOMATION_LINKS = 50;
+const MAX_AUTOMATION_CONCURRENCY = 10;
+
+function automationJobDirectoryFor(jobId) { return resolve(AUTOMATION_JOB_ROOT, jobId); }
+function automationJobStateFileFor(jobId) { return resolve(automationJobDirectoryFor(jobId), 'job.json'); }
+function persistAutomationJob(job) {
+  mkdirSync(automationJobDirectoryFor(job.jobId), { recursive: true });
+  writeFileSync(automationJobStateFileFor(job.jobId), JSON.stringify(job, null, 2));
+}
+function loadPersistedAutomationJobs() {
+  if (!existsSync(AUTOMATION_JOB_ROOT)) return;
+  for (const entry of readdirSync(AUTOMATION_JOB_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const job = JSON.parse(readFileSync(automationJobStateFileFor(entry.name), 'utf8'));
+      if (!job?.jobId || !Array.isArray(job.results)) continue;
+      if (job.status !== 'completed') {
+        job.results = job.results.map((result) => result.status === 'queued' || result.status === 'running'
+          ? { ...result, status: 'failed', success: false, error: '自动化 API 服务停止，任务未完成' }
+          : result);
+        job.status = 'completed';
+        job.completedAt = Date.now();
+        persistAutomationJob(job);
+      }
+      AUTOMATION_JOBS.set(job.jobId, job);
+    } catch { /* 忽略未完成写入或旧格式的任务记录 */ }
+  }
+}
 
 function parseOptions(args) {
   const options = { port: DEFAULT_PORT, host: DEFAULT_HOST };
@@ -201,6 +234,25 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
+function isAuthorizedAutomationRequest(request) {
+  if (!AUTOMATION_API_KEY) return false;
+  const authorization = request.headers.authorization || '';
+  const bearer = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length).trim() : '';
+  const headerKey = typeof request.headers['x-api-key'] === 'string' ? request.headers['x-api-key'].trim() : '';
+  const suppliedKey = bearer || headerKey;
+  const expected = Buffer.from(AUTOMATION_API_KEY);
+  const supplied = Buffer.from(suppliedKey);
+  return expected.length === supplied.length && timingSafeEqual(expected, supplied);
+}
+
+function requireAutomationApiKey(request, response) {
+  if (isAuthorizedAutomationRequest(request)) return true;
+  sendJson(response, AUTOMATION_API_KEY ? 401 : 503, {
+    error: AUTOMATION_API_KEY ? '缺少或无效的 API Key' : '服务端未配置 AUTOMATION_API_KEY',
+  });
+  return false;
+}
+
 function requestBody(request) {
   return new Promise((resolvePromise, rejectPromise) => {
     let body = '';
@@ -246,7 +298,7 @@ function enqueueAutomation(task, onStart) {
   });
 }
 
-function executeAutomation(index, targetUrl, runDirectory) {
+function executeAutomation(index, targetUrl, runDirectory, { dryRun = false } = {}) {
   const resultFile = resolve(runDirectory, `result-${index}.json`);
   const command = process.platform === 'win32' ? resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx.cmd') : resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx');
   const startedAt = Date.now();
@@ -254,7 +306,9 @@ function executeAutomation(index, targetUrl, runDirectory) {
   const label = `快速测试 ${runId} / 第 ${index} 项`;
   appendServerLog('INFO', `${label} 开始执行`);
   return new Promise((resolvePromise) => {
-    const child = spawn(command, [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`, `--output-dir=${QUICK_TEST_VIDEO_ROOT}`], {
+    const childArguments = [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`, `--output-dir=${QUICK_TEST_VIDEO_ROOT}`];
+    if (dryRun) childArguments.push('--dry-run');
+    const child = spawn(command, childArguments, {
       cwd: PROJECT_DIR,
       env: { ...process.env, AUTOMATION_LOG_FILE: LOG_FILE },
       stdio: ['ignore', 'ignore', 'pipe'],
@@ -287,8 +341,8 @@ function executeAutomation(index, targetUrl, runDirectory) {
   });
 }
 
-function runAutomation(index, targetUrl, runDirectory, onStart) {
-  return enqueueAutomation(() => executeAutomation(index, targetUrl, runDirectory), onStart);
+function runAutomation(index, targetUrl, runDirectory, onStart, options) {
+  return enqueueAutomation(() => executeAutomation(index, targetUrl, runDirectory, options), onStart);
 }
 
 function createQuickTestRun({ targetUrl, total, concurrency }) {
@@ -368,6 +422,201 @@ async function executeQuickTestRun(run) {
     run.completedAt = Date.now();
     persistRun(run);
   }
+}
+
+function normalizeAutomationLinks(payload) {
+  if (!Array.isArray(payload?.links) || payload.links.length < 1 || payload.links.length > MAX_AUTOMATION_LINKS) {
+    throw new Error(`links 必须是 1–${MAX_AUTOMATION_LINKS} 条链接的数组`);
+  }
+  return payload.links.map((item, index) => {
+    const rawUrl = typeof item === 'string' ? item : item?.url;
+    const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+    if (!url) throw new Error(`第 ${index + 1} 条链接为空`);
+    let parsedUrl;
+    try { parsedUrl = new URL(url); } catch { throw new Error(`第 ${index + 1} 条链接不是有效 URL`); }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error(`第 ${index + 1} 条链接必须使用 HTTP 或 HTTPS`);
+    if (!parsedUrl.href.includes('temp-lp-jing')) throw new Error(`第 ${index + 1} 条链接必须包含模板标识 temp-lp-jing`);
+    const name = typeof item === 'object' && typeof item?.name === 'string' && item.name.trim()
+      ? item.name.trim().slice(0, 100)
+      : `任务 ${index + 1}`;
+    return { index: index + 1, name, url };
+  });
+}
+
+function normalizeAutomationConcurrency(value) {
+  const concurrency = value === undefined ? 1 : Number.parseInt(value, 10);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_AUTOMATION_CONCURRENCY) {
+    throw new Error(`concurrency 必须是 1–${MAX_AUTOMATION_CONCURRENCY} 之间的整数`);
+  }
+  return concurrency;
+}
+
+function createAutomationJob({ links, concurrency, dryRun }) {
+  const job = {
+    jobId: `job-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    links,
+    total: links.length,
+    concurrency,
+    dryRun,
+    status: 'running',
+    startedAt: Date.now(),
+    completedAt: null,
+    results: links.map((item) => ({
+      index: item.index,
+      name: item.name,
+      url: item.url,
+      status: 'queued',
+      success: false,
+      duration: '—',
+      videoUrl: '',
+      videoPath: '',
+      error: '',
+    })),
+  };
+  AUTOMATION_JOBS.set(job.jobId, job);
+  persistAutomationJob(job);
+  return job;
+}
+
+function publicAutomationJob(job) {
+  const completed = job.results.filter((item) => item.status === 'success' || item.status === 'failed').length;
+  const success = job.results.filter((item) => item.status === 'success').length;
+  const failed = job.results.filter((item) => item.status === 'failed').length;
+  return {
+    jobId: job.jobId,
+    total: job.total,
+    concurrency: job.concurrency,
+    dryRun: job.dryRun,
+    status: job.status,
+    done: job.status === 'completed',
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    completedCount: completed,
+    success,
+    failed,
+    queue: {
+      active: activeAutomations,
+      waiting: AUTOMATION_QUEUE.length,
+      limit: MAX_CONCURRENT_AUTOMATIONS,
+    },
+    results: job.results.map(({ videoPath, ...result }) => result),
+  };
+}
+
+async function executeAutomationJob(job) {
+  const jobDirectory = automationJobDirectoryFor(job.jobId);
+  await mkdir(jobDirectory, { recursive: true });
+  try {
+    let nextIndex = 0;
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= job.links.length) return;
+        const item = job.links[index];
+        let result;
+        try {
+          result = await runAutomation(
+            item.index,
+            item.url,
+            jobDirectory,
+            () => {
+              job.results[index].status = 'running';
+              persistAutomationJob(job);
+            },
+            { dryRun: job.dryRun },
+          );
+        } catch (error) {
+          result = {
+            index: item.index,
+            successful: false,
+            duration: '—',
+            error: error instanceof Error ? error.message : String(error),
+            videoUrl: '',
+            videoPath: '',
+          };
+        }
+        job.results[index] = {
+          ...job.results[index],
+          status: result.successful ? 'success' : 'failed',
+          success: result.successful,
+          duration: result.duration,
+          error: result.error || '',
+          videoUrl: result.videoUrl || '',
+          videoPath: result.videoPath || '',
+        };
+        persistAutomationJob(job);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(job.concurrency, job.total) }, () => worker()));
+  } finally {
+    job.status = 'completed';
+    job.completedAt = Date.now();
+    persistAutomationJob(job);
+  }
+}
+
+async function createAutomationJobApi(request, response) {
+  if (request.method !== 'POST') { sendJson(response, 405, { error: '只支持 POST 请求' }); return; }
+  let payload;
+  try { payload = JSON.parse(await requestBody(request)); } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : '请求参数不是有效 JSON' });
+    return;
+  }
+  let links;
+  let concurrency;
+  try {
+    links = normalizeAutomationLinks(payload);
+    concurrency = normalizeAutomationConcurrency(payload.concurrency);
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  if (payload.dryRun !== undefined && typeof payload.dryRun !== 'boolean') {
+    sendJson(response, 400, { error: 'dryRun 必须是布尔值' });
+    return;
+  }
+  const job = createAutomationJob({ links, concurrency, dryRun: payload.dryRun === true });
+  void executeAutomationJob(job).catch((error) => {
+    appendServerLog('ERROR', `自动化 API 任务 ${job.jobId} 执行异常：${error instanceof Error ? error.message : String(error)}`);
+    job.results.forEach((result) => {
+      if (result.status === 'queued' || result.status === 'running') {
+        result.status = 'failed';
+        result.error = error instanceof Error ? error.message : String(error);
+      }
+    });
+    job.status = 'completed';
+    job.completedAt = Date.now();
+    persistAutomationJob(job);
+  });
+  sendJson(response, 202, publicAutomationJob(job));
+}
+
+async function handleAutomationApi(request, response) {
+  const pathname = new URL(request.url || '/', 'http://automation.local').pathname;
+  if (pathname === '/api/automation/health' && request.method === 'GET') {
+    sendJson(response, 200, {
+      service: 'automation-api',
+      apiKeyConfigured: Boolean(AUTOMATION_API_KEY),
+      maxLinks: MAX_AUTOMATION_LINKS,
+      maxConcurrency: MAX_CONCURRENT_AUTOMATIONS,
+    });
+    return;
+  }
+  if (!requireAutomationApiKey(request, response)) return;
+  if (pathname === '/api/automation/jobs') {
+    if (request.method !== 'POST') { sendJson(response, 405, { error: '只支持 POST 请求' }); return; }
+    await createAutomationJobApi(request, response);
+    return;
+  }
+  const jobMatch = pathname.match(/^\/api\/automation\/jobs\/([^/]+)$/);
+  if (jobMatch && request.method === 'GET') {
+    const job = AUTOMATION_JOBS.get(jobMatch[1]);
+    if (!job) { sendJson(response, 404, { error: '任务不存在或服务已重启' }); return; }
+    sendJson(response, 200, publicAutomationJob(job));
+    return;
+  }
+  sendJson(response, 405, { error: '不支持的自动化 API 请求' });
 }
 
 function removeVideo(videoPath) {
@@ -503,8 +752,16 @@ function serveCommand(options) {
   if (!existsSync(WEB_ROOT)) throw new Error(`找不到前端目录：${WEB_ROOT}`);
   ensureOutputDir();
   loadPersistedRuns();
+  loadPersistedAutomationJobs();
   const server = createServer((request, response) => {
     if ((request.url || '').split('?')[0] === '/api/quick-test/health') { sendJson(response, 200, { service: 'quick-test-server', pid: process.pid, port: options.port }); return; }
+    if ((request.url || '').split('?')[0].startsWith('/api/automation/')) {
+      handleAutomationApi(request, response).catch((error) => {
+        appendServerLog('ERROR', `自动化 API 接口处理失败：${error instanceof Error ? error.message : String(error)}`);
+        if (!response.headersSent) sendJson(response, 500, { error: error instanceof Error ? error.message : '自动化 API 执行失败' });
+      });
+      return;
+    }
     if ((request.url || '').split('?')[0].startsWith('/api/quick-test/run')) {
       handleQuickTestApi(request, response).catch((error) => {
         appendServerLog('ERROR', `快速测试接口处理失败：${error instanceof Error ? error.message : String(error)}`);
