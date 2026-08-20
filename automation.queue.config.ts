@@ -16,8 +16,12 @@ export const automationQueueConfig: AutomationQueueConfig = {
   concurrency: 4,
 
   links: [
-    { name: '第一条订单', url: 'https://h5-subscribe.yunxiacn.com/temp-lp-jing/index/6100b6d7fb8d64de74245697b16a5a8d?dingdan=11111&shouji=15900000000&xingming=卡塔&shenfen=320381198812252138&shebao=1&xubao=1&jichu=10.99&shengji=99.9&shunxu=1&bxres=0&outerid=yx_iolk_7ujm_0o6y_qsaa&__test_env__=1'},
-    { name: '第二条订单', url: 'https://h5-subscribe.yunxiacn.com/temp-lp-jing/index/6100b6d7fb8d64de74245697b16a5a8d?dingdan=11111&shouji=15900000000&xingming=卡塔&shenfen=320381198812252138&shebao=1&xubao=1&jichu=10.99&shengji=99.9&shunxu=2&shangdan=安康一生&bxres=1&outerid=yx_iolk_7ujm_0o6y_qsaa&__test_env__=1-order'},
+    { name: '1', url: 'https://jkxtfsdjyl.baigebao.com/temp-lp-jing/index/551083034552b9e58def52d5fed306c5?dingdan=tmp_7fa57936-22e6-41b6-b2a9-e19e416d9d04&shouji=15586205285&xingming=张三丰&shenfen=422201196601157754&shebao=1&xubao=1&jichu=0.6&shengji=200&shunxu=2&bxres=1&shangdan=守护保·百万医疗险&outerid=__OUTERID__yx_test_qety_sblp_pcdm_prod'},
+    { name: '2', url: 'https://jkxtfsdjyl.baigebao.com/temp-lp-jing/index/1e90be2d22e0f1e6760577b1ac6f0745?dingdan=AB260820150558733&shouji=13153003168&xingming=吕庆祝&shenfen=370122196408166552&shebao=1&xubao=1&jichu=0.6&shengji=175&shunxu=1&bxres=0&outerid=__OUTERID__yx_test_qety_sblp_pcdm_prod'},
+
+  
+  
+  
     // { name: '自定义测试 1', url: 'https://your-test-url.example.com/...' },
   ],
 };

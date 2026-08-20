@@ -312,20 +312,32 @@ async function executeQuickTestRun(run) {
   const runDirectory = runDirectoryFor(run.runId);
   await mkdir(runDirectory, { recursive: true });
   try {
-    for (let cursor = 0; cursor < run.total; cursor += run.concurrency) {
-      const indexes = Array.from({ length: Math.min(run.concurrency, run.total - cursor) }, (_, offset) => cursor + offset + 1);
-      const batch = await Promise.all(indexes.map((index) => runAutomation(
-        index,
-        run.targetUrl,
-        runDirectory,
-        () => { run.results[index - 1].status = 'running'; },
-      )));
-      batch.forEach((result) => {
+    let nextIndex = 1;
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index > run.total) return;
+        let result;
+        try {
+          result = await runAutomation(
+            index,
+            run.targetUrl,
+            runDirectory,
+            () => {
+              run.results[index - 1].status = 'running';
+              persistRun(run);
+            },
+          );
+        } catch (error) {
+          result = { index, successful: false, duration: '—', error: error.message || '自动化测试执行失败', videoUrl: '', videoPath: '' };
+        }
         const resultIndex = result.index - 1;
         run.results[resultIndex] = { ...run.results[resultIndex], status: result.successful ? 'success' : 'failed', successful: result.successful, duration: result.duration, error: result.error || '', videoUrl: result.videoUrl || '', videoPath: result.videoPath || '' };
-      });
-      persistRun(run);
-    }
+        persistRun(run);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(run.concurrency, run.total) }, () => worker()));
   } finally {
     run.status = 'completed';
     run.completedAt = Date.now();
