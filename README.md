@@ -66,6 +66,12 @@ curl 'http://127.0.0.1:<API端口>/api/automation/health'
 tail -f 'output/quick-test-server.log'
 ```
 
+API 任务开始、任务异常和回调结果会另外写入：
+
+```bash
+tail -f 'output/automation-api.log'
+```
+
 查看状态、重启和停止服务：
 
 ```bash

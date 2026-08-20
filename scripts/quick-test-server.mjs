@@ -32,6 +32,7 @@ const AUTOMATION_JOB_ROOT = resolve(OUTPUT_DIR, 'automation-jobs');
 const RUNNER_SCRIPT = resolve(PROJECT_DIR, 'scripts', 'quick-test-runner.ts');
 const LEGACY_STATE_FILE = resolve(OUTPUT_DIR, 'quick-test-server.json');
 const LOG_FILE = resolve(OUTPUT_DIR, 'quick-test-server.log');
+const AUTOMATION_API_LOG_FILE = resolve(OUTPUT_DIR, 'automation-api.log');
 const DEFAULT_PORT = 4173;
 // 默认监听所有 IPv4 网卡，同时支持本机和同一局域网设备访问。
 const DEFAULT_HOST = '0.0.0.0';
@@ -115,6 +116,14 @@ function appendServerLog(level, message) {
     appendFileSync(LOG_FILE, `${formatLogMessage(level, message)}\n`, 'utf8');
   } catch (error) {
     process.stderr.write(`[日志写入失败] ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+function appendAutomationApiLog(level, message) {
+  try {
+    ensureOutputDir();
+    appendFileSync(AUTOMATION_API_LOG_FILE, `${formatLogMessage(level, message)}\n`, 'utf8');
+  } catch (error) {
+    process.stderr.write(`[API 日志写入失败] ${error instanceof Error ? error.message : String(error)}\n`);
   }
 }
 function commandLog(level, message) {
@@ -541,10 +550,9 @@ async function deliverAutomationResultCallback(job, resultIndex) {
   result.callbackCompletedAt = outcome.completedAt;
   persistAutomationJob(job);
   const callbackLabel = `自动化 API 任务 ${job.jobId} / ${result.orderNo || result.name}`;
-  appendServerLog(
-    outcome.success ? 'INFO' : 'ERROR',
-    `${callbackLabel} 回调${outcome.success ? '成功' : `失败：${outcome.error}`}，请求 ${outcome.attempts} 次`,
-  );
+  const callbackMessage = `${callbackLabel} 回调${outcome.success ? '成功' : `失败：${outcome.error}`}，请求 ${outcome.attempts} 次`;
+  appendServerLog(outcome.success ? 'INFO' : 'ERROR', callbackMessage);
+  appendAutomationApiLog(outcome.success ? 'INFO' : 'ERROR', callbackMessage);
 }
 
 async function resumePendingAutomationCallbacks() {
@@ -639,6 +647,12 @@ async function executeAutomationJob(job) {
           completedAt: Date.now(),
         };
         persistAutomationJob(job);
+        if (!result.successful) {
+          appendAutomationApiLog(
+            'ERROR',
+            `自动化 API 任务 ${job.jobId} / ${item.orderNo || item.name} 执行异常：${result.error || '未知错误'}`,
+          );
+        }
         await deliverAutomationResultCallback(job, index);
       }
     };
@@ -676,8 +690,14 @@ async function createAutomationJobApi(request, response) {
     return;
   }
   const job = createAutomationJob({ links, concurrency, dryRun });
+  appendAutomationApiLog(
+    'INFO',
+    `自动化 API 任务 ${job.jobId} 开始：${job.total} 条链接，并发 ${job.concurrency}，dryRun=${job.dryRun}`,
+  );
   void executeAutomationJob(job).catch(async (error) => {
-    appendServerLog('ERROR', `自动化 API 任务 ${job.jobId} 执行异常：${error instanceof Error ? error.message : String(error)}`);
+    const errorMessage = `自动化 API 任务 ${job.jobId} 执行异常：${error instanceof Error ? error.message : String(error)}`;
+    appendServerLog('ERROR', errorMessage);
+    appendAutomationApiLog('ERROR', errorMessage);
     const completedAt = Date.now();
     job.results.forEach((result) => {
       if (result.status === 'queued' || result.status === 'running') {
@@ -866,7 +886,9 @@ function serveCommand(options) {
     if ((request.url || '').split('?')[0] === '/api/quick-test/health') { sendJson(response, 200, { service: 'quick-test-server', pid: process.pid, port: options.port }); return; }
     if ((request.url || '').split('?')[0].startsWith('/api/automation/')) {
       handleAutomationApi(request, response).catch((error) => {
-        appendServerLog('ERROR', `自动化 API 接口处理失败：${error instanceof Error ? error.message : String(error)}`);
+        const errorMessage = `自动化 API 接口处理失败：${error instanceof Error ? error.message : String(error)}`;
+        appendServerLog('ERROR', errorMessage);
+        appendAutomationApiLog('ERROR', errorMessage);
         if (!response.headersSent) sendJson(response, 500, { error: error instanceof Error ? error.message : '自动化 API 执行失败' });
       });
       return;
