@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { automationConfig } from '../automation.config';
+import { logger } from '../src/automation/logger';
 import { runOrderFlow } from '../src/automation/order-flow';
 import { parseOrderUrl } from '../src/automation/url-config';
 
@@ -51,6 +52,6 @@ async function main() {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+  logger.error('快速测试自动化执行器异常', error);
   process.exitCode = 1;
 });

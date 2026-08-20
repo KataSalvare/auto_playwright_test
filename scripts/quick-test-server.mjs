@@ -12,7 +12,7 @@
  * 只使用 Node.js 内置模块，不依赖 Python 或额外前端服务。
  */
 import { createServer, request as httpRequest } from 'node:http';
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
+import { appendFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync, openSync } from 'node:fs';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,6 +66,21 @@ function parseOptions(args) {
 }
 
 function ensureOutputDir() { mkdirSync(OUTPUT_DIR, { recursive: true }); }
+function formatLogMessage(level, message) { return `[${new Date().toISOString()}] [${level}] ${message}`; }
+function appendServerLog(level, message) {
+  try {
+    ensureOutputDir();
+    appendFileSync(LOG_FILE, `${formatLogMessage(level, message)}\n`, 'utf8');
+  } catch (error) {
+    process.stderr.write(`[日志写入失败] ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+function commandLog(level, message) {
+  const line = formatLogMessage(level, message);
+  appendServerLog(level, message);
+  if (level === 'ERROR') console.error(line);
+  else console.log(line);
+}
 function runDirectoryFor(runId) { return resolve(QUICK_RUN_ROOT, runId); }
 function runStateFileFor(runId) { return resolve(runDirectoryFor(runId), 'run.json'); }
 function persistRun(run) {
@@ -235,14 +250,24 @@ function executeAutomation(index, targetUrl, runDirectory) {
   const resultFile = resolve(runDirectory, `result-${index}.json`);
   const command = process.platform === 'win32' ? resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx.cmd') : resolve(PROJECT_DIR, 'node_modules', '.bin', 'tsx');
   const startedAt = Date.now();
+  const runId = basename(runDirectory);
+  const label = `快速测试 ${runId} / 第 ${index} 项`;
+  appendServerLog('INFO', `${label} 开始执行`);
   return new Promise((resolvePromise) => {
-    const child = spawn(command, [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`, `--output-dir=${QUICK_TEST_VIDEO_ROOT}`], { cwd: PROJECT_DIR, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, [RUNNER_SCRIPT, targetUrl, `--result-file=${resultFile}`, `--seed=${Date.now() + index}`, `--output-dir=${QUICK_TEST_VIDEO_ROOT}`], {
+      cwd: PROJECT_DIR,
+      env: { ...process.env, AUTOMATION_LOG_FILE: LOG_FILE },
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
     ACTIVE_CHILDREN.add(child);
     let errorOutput = '';
     let settled = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      const outcome = result.successful ? '执行成功' : `执行失败：${result.error || '未知错误'}`;
+      appendServerLog(result.successful ? 'INFO' : 'ERROR', `${label} ${outcome}，耗时 ${result.duration}`);
       resolvePromise(result);
     };
     child.stderr.on('data', (chunk) => {
@@ -358,7 +383,7 @@ async function removeRunArtifacts(run) {
     try {
       removeVideo(result.videoPath);
     } catch (error) {
-      console.error(`删除快速测试视频失败（${run.runId}）：${error.message}`);
+      appendServerLog('ERROR', `删除快速测试视频失败（${run.runId}）：${error.message}`);
     }
   }
   await rm(runDirectoryFor(run.runId), { recursive: true, force: true });
@@ -395,6 +420,7 @@ async function createQuickTest(request, response) {
 
   const run = createQuickTestRun({ targetUrl, total, concurrency });
   void executeQuickTestRun(run).catch((error) => {
+    appendServerLog('ERROR', `快速测试任务 ${run.runId} 执行异常：${error instanceof Error ? error.message : String(error)}`);
     run.results.forEach((result) => {
       if (result.status === 'queued' || result.status === 'running') {
         result.status = 'failed';
@@ -475,10 +501,17 @@ function serveVideo(filePath, request, response) {
 
 function serveCommand(options) {
   if (!existsSync(WEB_ROOT)) throw new Error(`找不到前端目录：${WEB_ROOT}`);
+  ensureOutputDir();
   loadPersistedRuns();
   const server = createServer((request, response) => {
     if ((request.url || '').split('?')[0] === '/api/quick-test/health') { sendJson(response, 200, { service: 'quick-test-server', pid: process.pid, port: options.port }); return; }
-    if ((request.url || '').split('?')[0].startsWith('/api/quick-test/run')) { handleQuickTestApi(request, response).catch((error) => sendJson(response, 500, { error: error.message || '自动化测试执行失败' })); return; }
+    if ((request.url || '').split('?')[0].startsWith('/api/quick-test/run')) {
+      handleQuickTestApi(request, response).catch((error) => {
+        appendServerLog('ERROR', `快速测试接口处理失败：${error instanceof Error ? error.message : String(error)}`);
+        sendJson(response, 500, { error: error.message || '自动化测试执行失败' });
+      });
+      return;
+    }
     const videoPath = safeVideoPath(request.url || '/');
     if (videoPath) {
       try { if (!statSync(videoPath).isFile()) throw new Error('Not found'); serveVideo(videoPath, request, response); } catch { response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); response.end('Not found'); }
@@ -523,13 +556,13 @@ function serveCommand(options) {
     }, 3_000).unref();
   };
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
-  server.on('error', (error) => { console.error(`快速测试服务启动失败：${error.message}`); cleanup(); process.exit(1); });
-  server.listen(options.port, options.host, () => { writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() }); console.log(`快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`); });
+  server.on('error', (error) => { appendServerLog('ERROR', `快速测试服务启动失败：${error.message}`); cleanup(); process.exit(1); });
+  server.listen(options.port, options.host, () => { writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() }); appendServerLog('INFO', `快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`); });
 }
 
 async function startCommand(args) {
   const options = parseOptions(args); const current = readState(options.port);
-  if (current && isRunning(current.pid)) { console.log(`服务已经在运行：${displayAccessUrls(current.host, current.port)}`); return; }
+  if (current && isRunning(current.pid)) { commandLog('INFO', `服务已经在运行：${displayAccessUrls(current.host, current.port)}`); return; }
   removeState(options.port);
   await stopOrphanedQuickTestServer(options);
   ensureOutputDir(); const logHandle = openSync(LOG_FILE, 'a');
@@ -542,7 +575,7 @@ async function startCommand(args) {
     if (spawnError) throw new Error(`无法启动服务：${spawnError.message}`);
     const state = readState(options.port);
     if (state?.pid === child.pid && isRunning(child.pid)) {
-      console.log(`快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`); console.log(`日志文件：${LOG_FILE}`); return;
+      commandLog('INFO', `快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`); commandLog('INFO', `日志文件：${LOG_FILE}`); return;
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
@@ -551,14 +584,14 @@ async function startCommand(args) {
 }
 
 async function stopCommand(args) {
-  const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); console.log('快速测试服务当前未运行。'); return; }
+  const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); commandLog('INFO', '快速测试服务当前未运行。'); return; }
   try { process.kill(current.pid); } catch (error) { throw new Error(`无法停止服务（PID ${current.pid}）：${error.message}`); }
   const deadline = Date.now() + 3000; while (isRunning(current.pid) && Date.now() < deadline) await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   if (isRunning(current.pid)) throw new Error(`服务仍在运行，请手动结束进程 PID ${current.pid}`);
-  removeState(options.port); console.log('快速测试服务已停止。');
+  removeState(options.port); commandLog('INFO', '快速测试服务已停止。');
 }
 
-function statusCommand(args) { const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); console.log('快速测试服务当前未运行。'); return; } console.log(`快速测试服务运行中：${displayAccessUrls(current.host, current.port)}（PID ${current.pid}）`); }
+function statusCommand(args) { const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); commandLog('INFO', '快速测试服务当前未运行。'); return; } commandLog('INFO', `快速测试服务运行中：${displayAccessUrls(current.host, current.port)}（PID ${current.pid}）`); }
 
 async function main() {
   const [command = 'restart', ...args] = process.argv.slice(2);
@@ -570,4 +603,4 @@ async function main() {
   else throw new Error(`未知命令：${command}。可用命令：start、restart、stop、status`);
 }
 
-main().catch((error) => { console.error(`错误：${error.message}`); process.exitCode = 1; });
+main().catch((error) => { commandLog('ERROR', `错误：${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });

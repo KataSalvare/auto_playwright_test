@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { automationConfig } from '../automation.config';
 import { ORDER_FIXTURES, type OrderFixtureName } from '../src/automation/order-links';
 import { runOrderFlow } from '../src/automation/order-flow';
+import { formatDuration, logger } from '../src/automation/logger';
 import { parseOrderUrl, safeUrlDescription } from '../src/automation/url-config';
 import type { AutomationOptions, BrowseProfile, InputStrategy, ProductChoice } from '../src/automation/types';
 
@@ -19,7 +20,7 @@ const inputStrategies = new Set<InputStrategy>([
 ]);
 
 function printHelp() {
-  console.log(`订单自动化脚本
+  logger.info(`订单自动化脚本
 
 用法：
   npm run automation -- "<完整链接>"
@@ -137,24 +138,27 @@ function parseArgs(argv: string[]) {
 }
 
 async function main() {
+  const startedAt = Date.now();
+  logger.info('命令行订单自动化开始');
+
   // dry-run 只校验链接参数，不会启动浏览器。
   const { targetUrl, options, dryRun, fixture } = parseArgs(process.argv.slice(2));
   const order = parseOrderUrl(targetUrl);
 
-  console.log(`订单 ${order.orderId}：${fixture ?? 'custom-url'}，流程 ${order.pageOrder}`);
-  console.log(`页面：${safeUrlDescription(targetUrl)}`);
-  console.log(`输入方案：${options.inputStrategy ?? '按 seed 随机'}`);
+  logger.info(`订单 ${order.orderId}：${fixture ?? 'custom-url'}，流程 ${order.pageOrder}`);
+  logger.info(`页面：${safeUrlDescription(targetUrl)}`);
+  logger.info(`输入方案：${options.inputStrategy ?? '按 seed 随机'}`);
 
   if (dryRun) {
-    console.log('参数校验通过，未启动浏览器。');
+    logger.info(`命令行订单自动化执行成功，耗时 ${formatDuration(startedAt)}，结果：dry-run 参数校验通过`);
     return;
   }
 
   const result = await runOrderFlow(order, options);
-  console.log(`流程成功，视频：${result.videoPath ?? '未生成'}`);
+  logger.info(`流程成功，视频：${result.videoPath ?? '未生成'}，命令耗时 ${formatDuration(startedAt)}`);
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+  logger.error('命令行订单自动化失败', error);
   process.exitCode = 1;
 });

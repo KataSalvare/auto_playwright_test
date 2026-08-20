@@ -1,5 +1,6 @@
 import { automationConfig } from '../automation.config';
 import { automationQueueConfig } from '../automation.queue.config';
+import { formatDuration, logger } from '../src/automation/logger';
 import { runOrderFlow } from '../src/automation/order-flow';
 import { parseOrderUrl, safeUrlDescription } from '../src/automation/url-config';
 import type { AutomationOptions } from '../src/automation/types';
@@ -61,30 +62,33 @@ async function runQueueItem(item: QueueLink, index: number, total: number, dryRu
   const label = `[${index + 1}/${total}] ${item.name}`;
   try {
     const order = parseOrderUrl(item.url);
-    console.log(`${label} 开始执行：${safeUrlDescription(item.url)}，流程 ${order.pageOrder}`);
+    logger.info(`${label} 开始执行：${safeUrlDescription(item.url)}，流程 ${order.pageOrder}`);
     if (dryRun) {
-      console.log(`${label} 参数校验通过（dry-run）`);
+      logger.info(`${label} 执行成功，耗时 0.0s，结果：参数校验通过（dry-run）`);
       return { index, name: item.name || `任务 ${index + 1}`, success: true, duration: '0.0s' };
     }
 
     const result = await runOrderFlow(order, createOptions(index));
-    console.log(`${label} 执行成功${result.videoPath ? `，视频：${result.videoPath}` : ''}`);
-    return { index, name: item.name || `任务 ${index + 1}`, success: true, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s` };
+    const duration = formatDuration(startedAt);
+    logger.info(`${label} 执行成功，耗时 ${duration}${result.videoPath ? `，视频：${result.videoPath}` : ''}`);
+    return { index, name: item.name || `任务 ${index + 1}`, success: true, duration };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`${label} 执行失败：${message}`);
-    return { index, name: item.name || `任务 ${index + 1}`, success: false, duration: `${((Date.now() - startedAt) / 1000).toFixed(1)}s`, error: message };
+    const duration = formatDuration(startedAt);
+    logger.error(`${label} 执行失败，耗时 ${duration}`, error);
+    return { index, name: item.name || `任务 ${index + 1}`, success: false, duration, error: message };
   }
 }
 
 async function main() {
+  const startedAt = Date.now();
   const dryRun = parseDryRun();
   const { concurrency, links } = validateConfig();
   const results: QueueResult[] = [];
   let nextIndex = 0;
 
-  console.log(`命令行测试队列：${links.length} 条链接，最大并发 ${concurrency}${dryRun ? '，dry-run 模式' : ''}`);
-  links.forEach((item, index) => console.log(`[${index + 1}/${links.length}] ${item.name} 已进入队列`));
+  logger.info(`命令行测试队列开始：${links.length} 条链接，最大并发 ${concurrency}${dryRun ? '，dry-run 模式' : ''}`);
+  links.forEach((item, index) => logger.info(`[${index + 1}/${links.length}] ${item.name} 已进入队列`));
 
   async function worker() {
     while (nextIndex < links.length) {
@@ -97,17 +101,17 @@ async function main() {
   await Promise.all(Array.from({ length: Math.min(concurrency, links.length) }, () => worker()));
 
   const failed = results.filter((result) => !result.success);
-  console.log(`队列执行完成：${links.length - failed.length} 条成功，${failed.length} 条失败`);
+  logger.info(`队列执行完成：${links.length - failed.length} 条成功，${failed.length} 条失败，命令耗时 ${formatDuration(startedAt)}`);
   if (failed.length > 0) {
-    console.error('失败任务：');
+    logger.error('失败任务：');
     failed.sort((left, right) => left.index - right.index).forEach((result) => {
-      console.error(`- ${result.name}：${result.error}`);
+      logger.error(`- ${result.name}：${result.error}`);
     });
     process.exitCode = 1;
   }
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+  logger.error('命令行测试队列失败', error);
   process.exitCode = 1;
 });

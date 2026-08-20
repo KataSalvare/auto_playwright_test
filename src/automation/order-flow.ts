@@ -10,12 +10,13 @@ import type { LocatorTestId } from './locators';
 import { createSeededRandom, pick, randomBetween } from './random';
 import { finalizeVideo } from './video-manager';
 import type { AutomationOptions, HumanBrowseBehavior, OrderInput, RunResult } from './types';
+import { formatDuration, logger } from './logger';
 
 const defaultOutputDir = resolve('output/videos');
 // 自动化统一模拟 iPhone 15 的完整屏幕尺寸，不随运行环境窗口变化。
 const iPhone15Screen = { width: 392, height: 852 } as const;
 const sleep = (durationMs: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs));
-const mark = (message: string) => console.log(`· ${message}`);
+const mark = (message: string) => logger.info(`· ${message}`);
 const readingOverlayTriggerMs = 2_000;
 const readingWaitPollMs = 100;
 const readingOverlayDismissChance = 0.35;
@@ -641,96 +642,107 @@ export async function runOrderFlow(
   order: OrderInput,
   options: AutomationOptions,
 ): Promise<RunResult> {
-  // macOS 的 Chrome/Chromium 需要访问沙箱禁止的系统服务；在浏览器启动前给出明确提示。
-  assertBrowserLaunchAllowed();
-
-  // 每个订单使用独立浏览器上下文；原生录像在 context 关闭时完成写入。
-  const outputDir = options.outputDir || defaultOutputDir;
-  const pendingDir = resolve(outputDir, '.pending');
-  await mkdir(pendingDir, { recursive: true });
-
-  selectors.setTestIdAttribute('jing-testid');
-
-  let browser: Browser | undefined;
-  let context: BrowserContext | undefined;
-  let nativeVideo: ReturnType<Page['video']> | undefined;
-  const recordingStartedAt = Date.now();
-  let recordedPath: string | undefined;
-  let recordingCutoffAt: number | undefined;
-  const markRecordingCutoff = () => {
-    if (!recordingCutoffAt) recordingCutoffAt = Date.now();
-  };
-  const random = createSeededRandom(options.seed + 101);
-  let success = false;
-  let failure: unknown;
+  const startedAt = Date.now();
+  const runLabel = `订单 ${order.orderId} / 流程 ${order.pageOrder}`;
+  logger.info(`${runLabel} 开始执行`);
 
   try {
-    browser = await chromium.launch({
-      headless: options.headless,
-      channel: process.env.PW_CHANNEL || options.browserChannel,
-    });
-    context = await browser.newContext({
-      ...devices['iPhone 15'],
-      viewport: iPhone15Screen,
-      screen: iPhone15Screen,
-      recordVideo: {
-        dir: pendingDir,
-        size: iPhone15Screen,
-      },
-      locale: 'zh-CN',
-      timezoneId: 'Asia/Shanghai',
-      colorScheme: 'light',
-    });
-    const page = await context.newPage();
-    nativeVideo = page.video();
-    mark(`打开页面：流程 ${order.pageOrder}`);
-    await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
-    if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, markRecordingCutoff);
-    else await runRepeatOrder(page, options, random, markRecordingCutoff);
+    // macOS 的 Chrome/Chromium 需要访问沙箱禁止的系统服务；在浏览器启动前给出明确提示。
+    assertBrowserLaunchAllowed();
 
-    const flowLabel = order.pageOrder === 1 ? '首单' : '非首单';
-    const successStep = order.pageOrder === 1 ? 12 : 6;
-    // 最后一步：success Toast 是订单流程的唯一成功判定。
-    mark(`${flowLabel}步骤 ${successStep}：等待成功 Toast`);
-    await waitForAnyVisible(getSuccessToast(page), 30_000, '成功 Toast');
-    success = true;
-    mark(`${flowLabel}步骤 ${successStep}：检测到成功 Toast`);
+    // 每个订单使用独立浏览器上下文；原生录像在 context 关闭时完成写入。
+    const outputDir = options.outputDir || defaultOutputDir;
+    const pendingDir = resolve(outputDir, '.pending');
+    await mkdir(pendingDir, { recursive: true });
+
+    selectors.setTestIdAttribute('jing-testid');
+
+    let browser: Browser | undefined;
+    let context: BrowserContext | undefined;
+    let nativeVideo: ReturnType<Page['video']> | undefined;
+    const recordingStartedAt = Date.now();
+    let recordedPath: string | undefined;
+    let recordingCutoffAt: number | undefined;
+    const markRecordingCutoff = () => {
+      if (!recordingCutoffAt) recordingCutoffAt = Date.now();
+    };
+    const random = createSeededRandom(options.seed + 101);
+    let success = false;
+    let failure: unknown;
+
+    try {
+      browser = await chromium.launch({
+        headless: options.headless,
+        channel: process.env.PW_CHANNEL || options.browserChannel,
+      });
+      context = await browser.newContext({
+        ...devices['iPhone 15'],
+        viewport: iPhone15Screen,
+        screen: iPhone15Screen,
+        recordVideo: {
+          dir: pendingDir,
+          size: iPhone15Screen,
+        },
+        locale: 'zh-CN',
+        timezoneId: 'Asia/Shanghai',
+        colorScheme: 'light',
+      });
+      const page = await context.newPage();
+      nativeVideo = page.video();
+      mark(`打开页面：流程 ${order.pageOrder}`);
+      await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
+      if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, markRecordingCutoff);
+      else await runRepeatOrder(page, options, random, markRecordingCutoff);
+
+      const flowLabel = order.pageOrder === 1 ? '首单' : '非首单';
+      const successStep = order.pageOrder === 1 ? 12 : 6;
+      // 最后一步：success Toast 是订单流程的唯一成功判定。
+      mark(`${flowLabel}步骤 ${successStep}：等待成功 Toast`);
+      await waitForAnyVisible(getSuccessToast(page), 30_000, '成功 Toast');
+      success = true;
+      mark(`${flowLabel}步骤 ${successStep}：检测到成功 Toast`);
+    } catch (error) {
+      failure = error;
+    } finally {
+      try {
+        // 原生 Video 只有在 context 关闭后才保证已写入磁盘。
+        if (context) await context.close();
+        if (nativeVideo) recordedPath = await nativeVideo.path();
+      } catch (error) {
+        if (!failure) failure = error;
+      }
+      try {
+        if (browser) await browser.close();
+      } catch (error) {
+        if (!failure) failure = error;
+      }
+    }
+
+    const videoPath = await finalizeVideo({
+      recordedPath,
+      success,
+      orderId: order.orderId,
+      outputDir,
+      deleteFailedVideo: options.deleteFailedVideo,
+      trimDurationMs: recordingCutoffAt ? recordingCutoffAt - recordingStartedAt : undefined,
+    });
+
+    if (!success) {
+      const message = failure instanceof Error ? failure.message : String(failure);
+      const videoHint = videoPath ? `\n失败视频：${videoPath}` : '';
+      throw new Error(`${message}${videoHint}`, { cause: failure });
+    }
+
+    const result = {
+      orderId: order.orderId,
+      pageOrder: order.pageOrder,
+      success,
+      videoPath,
+    };
+    logger.info(`${runLabel} 执行成功，耗时 ${formatDuration(startedAt)}${videoPath ? `，视频：${videoPath}` : ''}`);
+    return result;
   } catch (error) {
-    failure = error;
-  } finally {
-    try {
-      // 原生 Video 只有在 context 关闭后才保证已写入磁盘。
-      if (context) await context.close();
-      if (nativeVideo) recordedPath = await nativeVideo.path();
-    } catch (error) {
-      if (!failure) failure = error;
-    }
-    try {
-      if (browser) await browser.close();
-    } catch (error) {
-      if (!failure) failure = error;
-    }
+    logger.error(`${runLabel} 执行失败，耗时 ${formatDuration(startedAt)}`, error);
+    throw error;
   }
-
-  const videoPath = await finalizeVideo({
-    recordedPath,
-    success,
-    orderId: order.orderId,
-    outputDir,
-    deleteFailedVideo: options.deleteFailedVideo,
-    trimDurationMs: recordingCutoffAt ? recordingCutoffAt - recordingStartedAt : undefined,
-  });
-
-  if (!success) {
-    const message = failure instanceof Error ? failure.message : String(failure);
-    const videoHint = videoPath ? `\n失败视频：${videoPath}` : '';
-    throw new Error(`${message}${videoHint}`, { cause: failure });
-  }
-
-  return {
-    orderId: order.orderId,
-    pageOrder: order.pageOrder,
-    success,
-    videoPath,
-  };
 }

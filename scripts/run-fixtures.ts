@@ -1,5 +1,6 @@
 import { automationConfig } from '../automation.config';
 import { ORDER_FIXTURES } from '../src/automation/order-links';
+import { formatDuration, logger } from '../src/automation/logger';
 import { runOrderFlow } from '../src/automation/order-flow';
 import { parseOrderUrl } from '../src/automation/url-config';
 import type { AutomationOptions } from '../src/automation/types';
@@ -17,17 +18,20 @@ const options: AutomationOptions = {
 };
 
 async function main() {
+  const startedAt = Date.now();
+  logger.info('命令行夹具批量执行开始');
+
   // 顺序执行首单和非首单，任意一个失败都会终止本轮批量测试。
   for (const [name, url] of Object.entries(ORDER_FIXTURES)) {
     const order = parseOrderUrl(url);
-    console.log(`开始夹具：${name}，流程 ${order.pageOrder}`);
+    logger.info(`开始夹具：${name}，流程 ${order.pageOrder}`);
     await runOrderFlow(order, options);
   }
 
-  console.log('全部测试夹具执行完成。');
+  logger.info(`全部测试夹具执行完成，命令耗时 ${formatDuration(startedAt)}`);
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
+  logger.error('命令行夹具批量执行失败', error);
   process.exitCode = 1;
 });
