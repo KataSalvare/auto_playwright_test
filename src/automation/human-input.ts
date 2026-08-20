@@ -270,15 +270,18 @@ async function typeWithVirtualKeyboard(
   strategy: InputStrategy,
   random: () => number,
   wait: WaitFn,
+  focusInput = true,
 ) {
   // 手机号和身份证通过页面自定义数字键盘输入，避免直接 fill 绕过真实交互。
-  await byTestId(page, inputTestId).click();
-  // 模拟用户点击输入框后先观察键盘和页面状态，再开始输入。
-  await wait(inputFocusPause(
-    random,
-    VIRTUAL_INPUT_FOCUS_WAIT_MIN_MS,
-    VIRTUAL_INPUT_FOCUS_WAIT_MAX_MS,
-  ));
+  if (focusInput) {
+    await byTestId(page, inputTestId).click();
+    // 模拟用户点击输入框后先观察键盘和页面状态，再开始输入。
+    await wait(inputFocusPause(
+      random,
+      VIRTUAL_INPUT_FOCUS_WAIT_MIN_MS,
+      VIRTUAL_INPUT_FOCUS_WAIT_MAX_MS,
+    ));
+  }
 
   const typeCharacter = async (character: string) => {
     await clickKeyboardKey(page, character.toLowerCase() as KeyboardKey);
@@ -392,7 +395,22 @@ async function correctIdentityWithKeyboard(
   ));
   // 校验失败后，部分用户会多删几位，再从当前光标位置直接输入正确后缀。
   await deleteIdentityCharacters(page, expected.length - correctionStart, random, wait);
-  await typeIdentityWithKeyboard(page, expected.slice(correctionStart), strategy, random, wait);
+  // 删除完成后用户会短暂停顿确认内容；不重新点击输入框，保持当前键盘焦点。
+  await wait(inputFocusPause(
+    random,
+    VIRTUAL_INPUT_FOCUS_WAIT_MIN_MS,
+    VIRTUAL_INPUT_FOCUS_WAIT_MAX_MS,
+  ));
+  // 删除键不会关闭自定义键盘，等待结束后直接输入新的正确后缀。
+  await typeWithVirtualKeyboard(
+    page,
+    LOCATORS.identityInput,
+    expected.slice(correctionStart),
+    strategy,
+    random,
+    wait,
+    false,
+  );
 }
 
 export async function fillPhone({

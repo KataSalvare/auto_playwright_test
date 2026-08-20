@@ -225,3 +225,24 @@ test('身份证错误修正的多种删除位置最终都能得到正确值', as
     expect(getIdentityValue(), `漏输场景 seed=${seed}`).toBe(identityNumber);
   }
 });
+
+test('身份证局部删除后保持键盘焦点，直接输入正确后缀', async () => {
+  const { page, clicked, inputClicks } = createVirtualKeyboardPage();
+  const waits: number[] = [];
+
+  await fillIdentity({
+    page,
+    value: '320381198812252138',
+    seed: 20260819,
+    inputStrategy: 'sequential',
+    missingChance: 0,
+    errorChance: 1,
+    wait: async (durationMs) => { waits.push(durationMs); },
+  });
+
+  const lastDeleteIndex = clicked.lastIndexOf('del');
+  expect(lastDeleteIndex).toBeGreaterThanOrEqual(0);
+  expect(clicked.slice(lastDeleteIndex + 1)).not.toContain('idcard_input');
+  expect(inputClicks.filter(({ testId }) => testId === 'idcard_input')).toHaveLength(2);
+  expect(waits.some((durationMs) => durationMs >= 1_000 && durationMs <= 3_000)).toBe(true);
+});
