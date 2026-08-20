@@ -295,7 +295,7 @@ scripts\start-quick-test.bat stop
 
 如果不带任何参数重复执行 Mac 或 Windows 入口文件，服务运行中会自动重启；服务未运行时则直接启动。
 
-服务启动后访问 `http://localhost:4173/web/`。也可以使用 `npm run quick-test:start`、
+服务默认监听 `0.0.0.0`，启动后本机可以访问 `http://localhost:4173/web/`，同一局域网内的其他设备可以使用本机局域网 IP 访问，例如 `http://192.168.1.10:4173/web/`。启动日志会同时打印本机和局域网访问地址。也可以使用 `npm run quick-test:start`、
 `npm run quick-test:restart`、`npm run quick-test:stop` 和 `npm run quick-test:status`。
 默认端口是 `4173`，如需使用其他端口，命令格式为：
 
@@ -303,6 +303,14 @@ scripts\start-quick-test.bat stop
 npm run quick-test:start -- --port 4200
 npm run quick-test:restart -- --port 4200
 ```
+
+如果只允许本机访问，可以显式指定监听地址：
+
+```bash
+npm run quick-test:start -- --host 127.0.0.1
+```
+
+局域网访问要求设备与运行脚本的电脑处于同一网络，并允许对应端口通过系统防火墙。该快速测试服务没有登录认证，请只在受信任的局域网中开放。
 
 日志保存在 `output/quick-test-server.log`。
 

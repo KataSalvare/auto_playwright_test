@@ -17,6 +17,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { networkInterfaces } from 'node:os';
 
 const SCRIPT_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const PROJECT_DIR = resolve(SCRIPT_DIR, '..');
@@ -29,7 +30,8 @@ const RUNNER_SCRIPT = resolve(PROJECT_DIR, 'scripts', 'quick-test-runner.ts');
 const LEGACY_STATE_FILE = resolve(OUTPUT_DIR, 'quick-test-server.json');
 const LOG_FILE = resolve(OUTPUT_DIR, 'quick-test-server.log');
 const DEFAULT_PORT = 4173;
-const DEFAULT_HOST = '127.0.0.1';
+// 默认监听所有 IPv4 网卡，同时支持本机和同一局域网设备访问。
+const DEFAULT_HOST = '0.0.0.0';
 const MAX_CONCURRENT_AUTOMATIONS = Math.min(10, Math.max(1, Number.parseInt(process.env.QUICK_TEST_MAX_CONCURRENCY || '4', 10) || 4));
 const MAX_ERROR_OUTPUT_LENGTH = 64 * 1024;
 const QUICK_TEST_RUNS = new Map();
@@ -108,7 +110,25 @@ function removeState(port) {
 }
 function isRunning(pid) { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } }
 function writeState(state) { ensureOutputDir(); writeFileSync(stateFileForPort(state.port), JSON.stringify(state, null, 2)); }
-function displayHost(host) { return host === '0.0.0.0' || host === '::' ? 'localhost' : host; }
+function getLanIPv4Addresses() {
+  const addresses = [];
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries || []) {
+      const isIPv4 = entry.family === 'IPv4' || entry.family === 4;
+      if (isIPv4 && !entry.internal) addresses.push(entry.address);
+    }
+  }
+  return [...new Set(addresses)];
+}
+
+function displayAccessUrls(host, port) {
+  if (host !== '0.0.0.0' && host !== '::') return `http://${host}:${port}/web/`;
+
+  const localUrl = `http://127.0.0.1:${port}/web/`;
+  const lanUrls = getLanIPv4Addresses().map((address) => `http://${address}:${port}/web/`);
+  if (lanUrls.length === 0) return `本机：${localUrl}；未检测到局域网 IPv4 地址`;
+  return `本机：${localUrl}；局域网：${lanUrls.join('、')}`;
+}
 
 function probeQuickTestServer(options) {
   const hostname = options.host === '0.0.0.0' ? '127.0.0.1' : options.host;
@@ -460,12 +480,12 @@ function serveCommand(options) {
   };
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
   server.on('error', (error) => { console.error(`快速测试服务启动失败：${error.message}`); cleanup(); process.exit(1); });
-  server.listen(options.port, options.host, () => { writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() }); console.log(`快速测试页面已启动：http://${displayHost(options.host)}:${options.port}/web/`); });
+  server.listen(options.port, options.host, () => { writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() }); console.log(`快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`); });
 }
 
 async function startCommand(args) {
   const options = parseOptions(args); const current = readState(options.port);
-  if (current && isRunning(current.pid)) { console.log(`服务已经在运行：http://${displayHost(current.host)}:${current.port}/web/`); return; }
+  if (current && isRunning(current.pid)) { console.log(`服务已经在运行：${displayAccessUrls(current.host, current.port)}`); return; }
   removeState(options.port);
   await stopOrphanedQuickTestServer(options);
   ensureOutputDir(); const logHandle = openSync(LOG_FILE, 'a');
@@ -478,7 +498,7 @@ async function startCommand(args) {
     if (spawnError) throw new Error(`无法启动服务：${spawnError.message}`);
     const state = readState(options.port);
     if (state?.pid === child.pid && isRunning(child.pid)) {
-      console.log(`快速测试页面已启动：http://${displayHost(options.host)}:${options.port}/web/`); console.log(`日志文件：${LOG_FILE}`); return;
+      console.log(`快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`); console.log(`日志文件：${LOG_FILE}`); return;
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
@@ -494,7 +514,7 @@ async function stopCommand(args) {
   removeState(options.port); console.log('快速测试服务已停止。');
 }
 
-function statusCommand(args) { const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); console.log('快速测试服务当前未运行。'); return; } console.log(`快速测试服务运行中：http://${displayHost(current.host)}:${current.port}/web/（PID ${current.pid}）`); }
+function statusCommand(args) { const options = parseOptions(args); const current = readState(options.port); if (!current || !isRunning(current.pid)) { removeState(options.port); console.log('快速测试服务当前未运行。'); return; } console.log(`快速测试服务运行中：${displayAccessUrls(current.host, current.port)}（PID ${current.pid}）`); }
 
 async function main() {
   const [command = 'restart', ...args] = process.argv.slice(2);
