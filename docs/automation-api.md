@@ -24,6 +24,8 @@ http://远程电脑IP:4173
 
 ```bash
 export AUTOMATION_API_KEY='替换为一段足够长的随机字符串'
+export NW_CALLBACK_URL='http://192.168.52.226:31004/api/nw/record/callback'
+export NW_CALLBACK_API_KEY='替换为Java服务端配置的回调密钥'
 npm run api:start
 ```
 
@@ -61,6 +63,7 @@ curl 'http://远程电脑IP:4173/api/automation/health'
 {
   "service": "automation-api",
   "apiKeyConfigured": true,
+  "callbackConfigured": true,
   "maxLinks": 50,
   "maxConcurrency": 4
 }
@@ -84,11 +87,11 @@ Authorization: Bearer 你的APIKey
 |---|---|---:|---:|---|
 | `links` | array | 是 | - | 业务链接数组，最多 50 条 |
 | `links[].url` | string | 是 | - | 完整业务 URL，必须包含 `temp-lp-jing` |
-| `links[].name` | string | 否 | `任务 N` | 任务名称，便于识别结果 |
+| `links[].name` | string | 正式任务必填 | - | 订单号，回调时作为 `orderNo` |
 | `concurrency` | integer | 否 | `1` | 本任务并发数，范围 1–10 |
 | `dryRun` | boolean | 否 | `false` | 设为 `true` 时只校验链接，不启动浏览器 |
 
-`links` 也支持直接传字符串：
+`dryRun: true` 时，`links` 也支持直接传字符串：
 
 ```json
 {
@@ -98,7 +101,7 @@ Authorization: Bearer 你的APIKey
 }
 ```
 
-推荐使用带 `name` 的对象格式。
+正式录制任务必须使用带 `name` 的对象格式。任务完成后只回调 `POST /api/automation/jobs` 创建的任务；前端快速测试、命令行和 `dryRun` 不发送回调。
 
 ### curl 示例
 
@@ -174,12 +177,18 @@ HTTP 状态码为 `202 Accepted`：
     {
       "index": 1,
       "name": "订单1",
+      "orderNo": "订单1",
       "url": "https://your-domain.example/temp-lp-jing/index/...?dingdan=ORDER001&...",
       "status": "queued",
       "success": false,
       "duration": "—",
       "videoUrl": "",
-      "error": ""
+      "error": "",
+      "completedAt": null,
+      "callbackStatus": "pending",
+      "callbackAttempts": 0,
+      "callbackLastError": "",
+      "callbackCompletedAt": null
     }
   ]
 }
@@ -201,7 +210,7 @@ curl 'http://远程电脑IP:4173/api/automation/jobs/job-1787210048192-j91x7kz' 
   -H 'Authorization: Bearer 你的APIKey'
 ```
 
-建议每隔 1–3 秒查询一次，直到返回 `done: true` 或 `status: "completed"`。
+建议每隔 1–3 秒查询一次，直到返回 `done: true` 或 `status: "completed"`。正式任务会在回调成功或重试结束后进入 `completed`；录制结果与回调结果通过各自的状态字段区分。
 
 ### 结果状态
 
@@ -217,6 +226,10 @@ curl 'http://远程电脑IP:4173/api/automation/jobs/job-1787210048192-j91x7kz' 
 | `results[].duration` | string | 执行耗时，例如 `12.4s` |
 | `results[].error` | string | 失败原因，成功时为空 |
 | `results[].videoUrl` | string | 成功视频的相对地址，未生成时为空 |
+| `results[].callbackStatus` | string | `not_required` / `pending` / `sending` / `success` / `failed` |
+| `results[].callbackAttempts` | number | 已发送回调的次数 |
+| `results[].callbackLastError` | string | 最后一次回调失败原因 |
+| `results[].callbackCompletedAt` | number/null | 回调结束时间戳（毫秒） |
 
 当 `videoUrl` 返回：
 
@@ -232,7 +245,19 @@ http://远程电脑IP:4173/videos/订单号-success-时间戳.mp4
 
 API 任务生成的视频实际保存在项目目录下的 `output/videos/`：成功视频位于 `output/videos/success/`，失败视频位于 `output/videos/failed/`。前端快速测试页面仍然使用独立的 `output/quick-test-videos/` 目录。
 
-## 6. 错误响应
+## 6. 执行结果回调
+
+正式 API 任务的每条链接执行结束后，脚本服务会调用：
+
+```text
+POST http://192.168.52.226:31004/api/nw/record/callback
+Authorization: Bearer <NW_CALLBACK_API_KEY>
+Content-Type: application/json
+```
+
+成功任务发送 `jobId`、`orderNo`、`status=success`、实际 `videoUrl`、`fileSize` 和 `completedAt`；失败任务发送 `status=failed` 和 `error`。不发送 `planNo`。网络错误、超时或 HTTP 非 200 时，分别等待 5 秒、10 秒和 30 秒重试。
+
+## 7. 错误响应
 
 错误响应统一为：
 
@@ -249,10 +274,10 @@ API 任务生成的视频实际保存在项目目录下的 `output/videos/`：�
 | `401` | API Key 缺失或错误 |
 | `404` | `jobId` 不存在 |
 | `405` | HTTP 方法不支持 |
-| `503` | 服务端未配置 `AUTOMATION_API_KEY` |
+| `503` | 服务端未配置任务 API Key，或正式任务缺少回调地址/回调密钥配置 |
 | `500` | 服务端处理异常 |
 
-## 7. 部署启动
+## 8. 部署启动
 
 在远程电脑执行：
 
@@ -260,6 +285,8 @@ API 任务生成的视频实际保存在项目目录下的 `output/videos/`：�
 npm install
 npm run test:install
 export AUTOMATION_API_KEY='替换为一段足够长的随机字符串'
+export NW_CALLBACK_URL='http://192.168.52.226:31004/api/nw/record/callback'
+export NW_CALLBACK_API_KEY='替换为Java服务端配置的回调密钥'
 npm run api:start
 ```
 
@@ -277,7 +304,7 @@ npm run api:stop
 node scripts/quick-test-server.mjs start --host 0.0.0.0 --port 4173
 ```
 
-## 8. 注意事项
+## 9. 注意事项
 
 - 业务链接中的手机号、姓名和身份证号属于敏感数据，请使用 HTTPS 或内网访问。
 - 建议通过防火墙或反向代理限制允许调用 API 的来源 IP。

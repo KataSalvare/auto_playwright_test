@@ -19,37 +19,77 @@
 
 完整接口文档见：[docs/automation-api.md](/Users/much/代码/仿朝发可回溯/docs/automation-api.md)。
 
-启动前先在远程电脑设置 API Key（不要把 Key 写进代码或提交到 Git）：
+### 启动 API 服务并启用结果回调
+
+回调接收端由业务服务提供，本项目不需要额外启动一个“回调服务”。启动本项目的 API 服务时配置回调地址和回调鉴权信息，正式 API 任务完成后会自动向该地址发送结果。
+
+首次部署先安装依赖：
 
 ```bash
-export AUTOMATION_API_KEY='替换为一段足够长的随机字符串'
-npm run api:start
+npm install
+npm run test:install
 ```
 
-服务默认监听 `0.0.0.0:4173`。如需修改端口或监听地址：
+每次打开新的终端窗口后，先设置以下环境变量。真实地址和密钥不要写入 README、代码或 Git：
 
 ```bash
-node scripts/quick-test-server.mjs start --host 0.0.0.0 --port 4173
+export AUTOMATION_API_KEY='<API服务鉴权密钥>'
+export NW_CALLBACK_URL='<回调接口完整地址>'
+export NW_CALLBACK_API_KEY='<回调接口鉴权密钥>'
+export NW_CALLBACK_TIMEOUT_MS='10000'
 ```
 
-健康检查：
+启动 API 服务：
 
 ```bash
-curl http://远程电脑IP:4173/api/automation/health
+npm run api:start -- --host 0.0.0.0 --port <API端口>
 ```
+
+服务启动后会在后台运行。检查 API 和回调配置是否生效：
+
+```bash
+curl 'http://127.0.0.1:<API端口>/api/automation/health'
+```
+
+正常响应中的两个配置项都应为 `true`：
+
+```json
+{
+  "apiKeyConfigured": true,
+  "callbackConfigured": true
+}
+```
+
+查看运行和回调日志：
+
+```bash
+tail -f 'output/quick-test-server.log'
+```
+
+查看状态、重启和停止服务：
+
+```bash
+npm run api:status -- --port <API端口>
+npm run api:restart -- --host 0.0.0.0 --port <API端口>
+npm run api:stop -- --port <API端口>
+```
+
+重启服务前也必须在当前终端设置上述环境变量，否则正式 API 任务会因缺少回调配置而被拒绝。
+
+### 调用 API
 
 提交批量任务：
 
 ```bash
-curl -X POST 'http://远程电脑IP:4173/api/automation/jobs' \
+curl -X POST '<API服务地址>/api/automation/jobs' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer 替换为你的APIKey' \
+  -H 'Authorization: Bearer <API服务鉴权密钥>' \
   -d '{
     "concurrency": 2,
     "dryRun": false,
     "links": [
-      {"name": "订单1", "url": "https://your-domain.example/temp-lp-jing/index/...?dingdan=...&shouji=...&xingming=...&shenfen=...&shebao=1&xubao=1&shunxu=1"},
-      {"name": "订单2", "url": "https://your-domain.example/temp-lp-jing/index/...?dingdan=...&shouji=...&xingming=...&shenfen=...&shebao=1&xubao=1&shunxu=2"}
+      {"name": "<订单号1>", "url": "<完整业务链接1>"},
+      {"name": "<订单号2>", "url": "<完整业务链接2>"}
     ]
   }'
 ```
@@ -57,20 +97,11 @@ curl -X POST 'http://远程电脑IP:4173/api/automation/jobs' \
 查询任务：
 
 ```bash
-curl 'http://远程电脑IP:4173/api/automation/jobs/返回的jobId' \
-  -H 'Authorization: Bearer 替换为你的APIKey'
+curl '<API服务地址>/api/automation/jobs/<jobId>' \
+  -H 'Authorization: Bearer <API服务鉴权密钥>'
 ```
 
-请求约束：一次最多 50 条链接，并发数为 1–10；服务默认最多同时运行 4 个浏览器任务，可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整。每条链接必须包含 `temp-lp-jing` 和现有脚本要求的必要参数。`dryRun: true` 只做链接校验，不启动浏览器。API 成功结果中的 `videoUrl` 是相对于 API 服务地址的路径，例如 `/videos/...mp4`，服务端拼接 `http://远程电脑IP:4173` 即可访问；API 视频文件保存到 `output/videos/`。
-
-远程部署至少需要先执行：
-
-```bash
-npm install
-npm run test:install
-export AUTOMATION_API_KEY='替换为一段足够长的随机字符串'
-npm run api:start
-```
+请求约束：一次最多 50 条链接，并发数为 1–10；服务默认最多同时运行 4 个浏览器任务，可通过 `QUICK_TEST_MAX_CONCURRENCY` 调整。正式 API 任务的每条链接必须提供订单号 `name`，并包含 `temp-lp-jing` 和现有脚本要求的必要参数。任务完成后脚本服务会向 `NW_CALLBACK_URL` 回调结果；`dryRun: true` 只做链接校验，不启动浏览器也不发送回调。API 成功结果中的 `videoUrl` 是相对于 API 服务地址的路径，例如 `/videos/...mp4`，服务端拼接 `http://远程电脑IP:4173` 即可访问；API 视频文件保存到 `output/videos/`。
 
 建议在生产环境通过防火墙或反向代理限制访问来源，并使用 HTTPS；业务链接包含手机号、姓名和身份证参数，API 请求和日志都应按敏感数据处理。
 
@@ -377,7 +408,7 @@ npm run quick-test:start -- --host 127.0.0.1
 
 自动生成规则集中在 [web/test-config.js](/Users/much/代码/仿朝发可回溯/web/test-config.js)，可以修改：
 
-- `originalUrl`：原始 URL，默认为 `https://h5-subscribe.yunxiacn.com/temp-lp-jing/index/6100b6d7fb8d64de74245697b16a5a8d`
+- `originalUrl`：业务测试页面的原始 URL，具体地址通过本地配置维护，不在 README 中公开
 - `defaults`：订单号前缀、姓名池、固定身份证号池、手机号前缀、价格、`shangdan`、`outerid` 和环境标记
 - `presets`：首单、非首单等流程预设，以及预设要附带的额外参数
 - `parameters`：页面参数字典及必填/可选标记

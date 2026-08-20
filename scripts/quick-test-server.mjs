@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
+import { createAutomationCallbackDelivery } from './automation-callback.mjs';
 
 const SCRIPT_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const PROJECT_DIR = resolve(SCRIPT_DIR, '..');
@@ -58,6 +59,14 @@ const CONTENT_TYPES = {
 const AUTOMATION_API_KEY = process.env.AUTOMATION_API_KEY || '';
 const MAX_AUTOMATION_LINKS = 50;
 const MAX_AUTOMATION_CONCURRENCY = 10;
+const NW_CALLBACK_URL = process.env.NW_CALLBACK_URL || '';
+const NW_CALLBACK_API_KEY = process.env.NW_CALLBACK_API_KEY || '';
+const NW_CALLBACK_TIMEOUT_MS = Math.max(1_000, Number.parseInt(process.env.NW_CALLBACK_TIMEOUT_MS || '10000', 10) || 10_000);
+const AUTOMATION_CALLBACK_DELIVERY = createAutomationCallbackDelivery({
+  url: NW_CALLBACK_URL,
+  apiKey: NW_CALLBACK_API_KEY,
+  timeoutMs: NW_CALLBACK_TIMEOUT_MS,
+});
 
 function automationJobDirectoryFor(jobId) { return resolve(AUTOMATION_JOB_ROOT, jobId); }
 function automationJobStateFileFor(jobId) { return resolve(automationJobDirectoryFor(jobId), 'job.json'); }
@@ -444,7 +453,7 @@ async function executeQuickTestRun(run) {
   }
 }
 
-function normalizeAutomationLinks(payload) {
+function normalizeAutomationLinks(payload, { requireName = false } = {}) {
   if (!Array.isArray(payload?.links) || payload.links.length < 1 || payload.links.length > MAX_AUTOMATION_LINKS) {
     throw new Error(`links 必须是 1–${MAX_AUTOMATION_LINKS} 条链接的数组`);
   }
@@ -456,10 +465,12 @@ function normalizeAutomationLinks(payload) {
     try { parsedUrl = new URL(url); } catch { throw new Error(`第 ${index + 1} 条链接不是有效 URL`); }
     if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error(`第 ${index + 1} 条链接必须使用 HTTP 或 HTTPS`);
     if (!parsedUrl.href.includes('temp-lp-jing')) throw new Error(`第 ${index + 1} 条链接必须包含模板标识 temp-lp-jing`);
-    const name = typeof item === 'object' && typeof item?.name === 'string' && item.name.trim()
+    const suppliedName = typeof item === 'object' && typeof item?.name === 'string'
       ? item.name.trim().slice(0, 100)
-      : `任务 ${index + 1}`;
-    return { index: index + 1, name, url };
+      : '';
+    if (requireName && !suppliedName) throw new Error(`第 ${index + 1} 条链接缺少订单号 name`);
+    const name = suppliedName || `任务 ${index + 1}`;
+    return { index: index + 1, name, orderNo: suppliedName, url };
   });
 }
 
@@ -484,6 +495,7 @@ function createAutomationJob({ links, concurrency, dryRun }) {
     results: links.map((item) => ({
       index: item.index,
       name: item.name,
+      orderNo: item.orderNo,
       url: item.url,
       status: 'queued',
       success: false,
@@ -491,11 +503,62 @@ function createAutomationJob({ links, concurrency, dryRun }) {
       videoUrl: '',
       videoPath: '',
       error: '',
+      completedAt: null,
+      callbackStatus: dryRun ? 'not_required' : 'pending',
+      callbackAttempts: 0,
+      callbackLastError: '',
+      callbackCompletedAt: null,
     })),
   };
   AUTOMATION_JOBS.set(job.jobId, job);
   persistAutomationJob(job);
   return job;
+}
+
+async function deliverAutomationResultCallback(job, resultIndex) {
+  const result = job.results[resultIndex];
+  if (!result || job.dryRun || result.callbackStatus === 'success' || result.callbackStatus === 'failed') return;
+
+  const outcome = await AUTOMATION_CALLBACK_DELIVERY.deliver({
+    jobId: job.jobId,
+    orderNo: result.orderNo || result.name,
+    successful: result.success,
+    videoUrl: result.videoUrl,
+    videoPath: result.videoPath,
+    error: result.error,
+    completedAt: result.completedAt,
+  }, {
+    onAttempt: ({ attempt }) => {
+      result.callbackStatus = 'sending';
+      result.callbackAttempts = attempt;
+      persistAutomationJob(job);
+    },
+  });
+
+  result.callbackStatus = outcome.success ? 'success' : 'failed';
+  result.callbackAttempts = outcome.attempts;
+  result.callbackLastError = outcome.error || '';
+  result.callbackCompletedAt = outcome.completedAt;
+  persistAutomationJob(job);
+  const callbackLabel = `自动化 API 任务 ${job.jobId} / ${result.orderNo || result.name}`;
+  appendServerLog(
+    outcome.success ? 'INFO' : 'ERROR',
+    `${callbackLabel} 回调${outcome.success ? '成功' : `失败：${outcome.error}`}，请求 ${outcome.attempts} 次`,
+  );
+}
+
+async function resumePendingAutomationCallbacks() {
+  if (!AUTOMATION_CALLBACK_DELIVERY.configured) return;
+  const pending = [];
+  for (const job of AUTOMATION_JOBS.values()) {
+    if (job.dryRun) continue;
+    job.results.forEach((result, index) => {
+      if (result.callbackStatus === 'pending' || result.callbackStatus === 'sending') {
+        pending.push(deliverAutomationResultCallback(job, index));
+      }
+    });
+  }
+  await Promise.all(pending);
 }
 
 function publicAutomationJob(job) {
@@ -573,8 +636,10 @@ async function executeAutomationJob(job) {
           error: result.error || '',
           videoUrl: result.videoUrl || '',
           videoPath: result.videoPath || '',
+          completedAt: Date.now(),
         };
         persistAutomationJob(job);
+        await deliverAutomationResultCallback(job, index);
       }
     };
     await Promise.all(Array.from({ length: Math.min(job.concurrency, job.total) }, () => worker()));
@@ -592,28 +657,42 @@ async function createAutomationJobApi(request, response) {
     sendJson(response, 400, { error: error instanceof Error ? error.message : '请求参数不是有效 JSON' });
     return;
   }
+  if (payload.dryRun !== undefined && typeof payload.dryRun !== 'boolean') {
+    sendJson(response, 400, { error: 'dryRun 必须是布尔值' });
+    return;
+  }
+  const dryRun = payload.dryRun === true;
+  if (!dryRun && !AUTOMATION_CALLBACK_DELIVERY.configured) {
+    sendJson(response, 503, { error: '服务端未配置 NW_CALLBACK_URL 或 NW_CALLBACK_API_KEY' });
+    return;
+  }
   let links;
   let concurrency;
   try {
-    links = normalizeAutomationLinks(payload);
+    links = normalizeAutomationLinks(payload, { requireName: !dryRun });
     concurrency = normalizeAutomationConcurrency(payload.concurrency);
   } catch (error) {
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     return;
   }
-  if (payload.dryRun !== undefined && typeof payload.dryRun !== 'boolean') {
-    sendJson(response, 400, { error: 'dryRun 必须是布尔值' });
-    return;
-  }
-  const job = createAutomationJob({ links, concurrency, dryRun: payload.dryRun === true });
-  void executeAutomationJob(job).catch((error) => {
+  const job = createAutomationJob({ links, concurrency, dryRun });
+  void executeAutomationJob(job).catch(async (error) => {
     appendServerLog('ERROR', `自动化 API 任务 ${job.jobId} 执行异常：${error instanceof Error ? error.message : String(error)}`);
+    const completedAt = Date.now();
     job.results.forEach((result) => {
       if (result.status === 'queued' || result.status === 'running') {
         result.status = 'failed';
+        result.success = false;
         result.error = error instanceof Error ? error.message : String(error);
+        result.completedAt = completedAt;
       }
     });
+    persistAutomationJob(job);
+    await Promise.all(job.results.map((result, index) => (
+      result.callbackStatus === 'pending' || result.callbackStatus === 'sending'
+        ? deliverAutomationResultCallback(job, index)
+        : Promise.resolve()
+    )));
     job.status = 'completed';
     job.completedAt = Date.now();
     persistAutomationJob(job);
@@ -627,6 +706,7 @@ async function handleAutomationApi(request, response) {
     sendJson(response, 200, {
       service: 'automation-api',
       apiKeyConfigured: Boolean(AUTOMATION_API_KEY),
+      callbackConfigured: AUTOMATION_CALLBACK_DELIVERY.configured,
       maxLinks: MAX_AUTOMATION_LINKS,
       maxConcurrency: MAX_CONCURRENT_AUTOMATIONS,
     });
@@ -843,7 +923,13 @@ function serveCommand(options) {
   };
   process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
   server.on('error', (error) => { appendServerLog('ERROR', `快速测试服务启动失败：${error.message}`); cleanup(); process.exit(1); });
-  server.listen(options.port, options.host, () => { writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() }); appendServerLog('INFO', `快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`); });
+  server.listen(options.port, options.host, () => {
+    writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() });
+    appendServerLog('INFO', `快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`);
+    void resumePendingAutomationCallbacks().catch((error) => {
+      appendServerLog('ERROR', `恢复待发送回调失败：${error instanceof Error ? error.message : String(error)}`);
+    });
+  });
 }
 
 async function startCommand(args) {
