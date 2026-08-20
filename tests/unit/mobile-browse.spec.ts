@@ -103,7 +103,25 @@ test('scrollToBottom 到达页面底部后停止，并且不回滑', async () =>
     wait: async () => {},
   });
 
-  await expect(browse.scrollToBottom({ maxSwipes: 4 })).resolves.toEqual({ swipes: 2 });
+  await expect(browse.scrollToBottom({ maxSwipes: 4 })).resolves.toEqual({ swipes: 1 });
   expect(fake.wheelDeltas.length).toBeGreaterThan(0);
   expect(fake.wheelDeltas.every((delta) => delta > 0)).toBeTruthy();
+});
+
+test('scrollUntilVisible 到达底部后不再继续发送下滚指令', async () => {
+  const fake = createFakePage(1);
+  const browse = createMobileBrowseBehavior({
+    page: fake.page,
+    profile: 'reader',
+    seed: 1,
+    wait: async () => {},
+  });
+  const locator = {
+    boundingBox: async () => ({ x: 0, y: 1_000, width: 100, height: 100 }),
+    page: () => fake.page,
+  } as never;
+
+  await expect(browse.scrollUntilVisible(locator, { maxSwipes: 4 }))
+    .rejects.toThrow('页面已到达底部');
+  expect(fake.wheelDeltas).toEqual([]);
 });

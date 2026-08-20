@@ -107,6 +107,17 @@ export function createMobileBrowseBehavior({
   }
 
   async function scroll({ allowBacktrack = true } = {}) {
+    // 到达页面底部后，浏览器可能仍然接受 wheel 事件并触发滚动动画。
+    // 先做边界检查，避免在底部反复发送无效的下滚指令造成画面抖动。
+    if (await isPageAtBottom(page)) {
+      return {
+        distance: 0,
+        duration: 0,
+        steps: 0,
+        backtracked: false,
+      };
+    }
+
     const distance = viewportHeight * randomBetween(
       random,
       profileConfig.minScrollRatio,
@@ -123,6 +134,9 @@ export function createMobileBrowseBehavior({
       steps += chunkSteps;
       await performGesture(chunkDistance, chunkDuration, chunkSteps);
       if (chunk < chunks - 1) {
+        // 一次手势可能在分段中途抵达底部，立即结束本次手势，
+        // 防止后续分段继续向下发送无效 wheel 事件。
+        if (await isPageAtBottom(page)) break;
         await pause({
           minMs: profileConfig.microPauseMin,
           maxMs: profileConfig.microPauseMax,
@@ -132,7 +146,9 @@ export function createMobileBrowseBehavior({
     await pause();
 
     let backtracked = false;
-    if (allowBacktrack && random() < profileConfig.backtrackChance) {
+    // 到底部后不执行反向回滚，避免“下滚到边界后立即上回滚”造成视觉抖动。
+    const reachedBottom = await isPageAtBottom(page);
+    if (!reachedBottom && allowBacktrack && random() < profileConfig.backtrackChance) {
       const backtrackDistance = viewportHeight * randomBetween(random, 0.08, 0.18);
       const backtrackDuration = randomBetween(random, 300, 540);
       const backtrackSteps = randomInteger(random, 12, 19);
@@ -147,7 +163,14 @@ export function createMobileBrowseBehavior({
   async function scrollUntilVisible(locator: Locator, { maxSwipes = 8 } = {}) {
     for (let swipe = 0; swipe <= maxSwipes; swipe += 1) {
       if (await isLocatorInViewport(locator)) return { swipes: swipe };
-      if (swipe < maxSwipes) await scroll();
+      if (swipe < maxSwipes) {
+        // 目标仍不在视口且页面已经到底部时，继续下滚没有意义，
+        // 直接失败并保留明确原因，避免无效滚动导致视频抖动。
+        if (await isPageAtBottom(page)) {
+          throw new Error(`页面已到达底部，但目标在 ${maxSwipes} 次浏览后仍不可见`);
+        }
+        await scroll();
+      }
     }
     throw new Error(`经过 ${maxSwipes} 次滑动后目标仍不可见`);
   }
