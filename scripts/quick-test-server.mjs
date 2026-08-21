@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { createAutomationCallbackDelivery } from './automation-callback.mjs';
+import { cleanupAutomationData } from './automation-retention.mjs';
 
 const SCRIPT_DIR = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const PROJECT_DIR = resolve(SCRIPT_DIR, '..');
@@ -43,6 +44,7 @@ const AUTOMATION_JOBS = new Map();
 const AUTOMATION_QUEUE = [];
 const ACTIVE_CHILDREN = new Set();
 let activeAutomations = 0;
+let automationCleanupTimer = null;
 
 const CONTENT_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -63,6 +65,8 @@ const MAX_AUTOMATION_CONCURRENCY = 10;
 const NW_CALLBACK_URL = process.env.NW_CALLBACK_URL || '';
 const NW_CALLBACK_API_KEY = process.env.NW_CALLBACK_API_KEY || '';
 const NW_CALLBACK_TIMEOUT_MS = Math.max(1_000, Number.parseInt(process.env.NW_CALLBACK_TIMEOUT_MS || '10000', 10) || 10_000);
+const AUTOMATION_CLEANUP_ENABLED = process.env.AUTOMATION_CLEANUP_ENABLED !== 'false';
+const AUTOMATION_CLEANUP_INTERVAL_MS = Math.max(60_000, Number.parseInt(process.env.AUTOMATION_CLEANUP_INTERVAL_MS || String(24 * 60 * 60 * 1000), 10) || (24 * 60 * 60 * 1000));
 const AUTOMATION_CALLBACK_DELIVERY = createAutomationCallbackDelivery({
   url: NW_CALLBACK_URL,
   apiKey: NW_CALLBACK_API_KEY,
@@ -125,6 +129,23 @@ function appendAutomationApiLog(level, message) {
   } catch (error) {
     process.stderr.write(`[API 日志写入失败] ${error instanceof Error ? error.message : String(error)}\n`);
   }
+}
+function runAutomationCleanup(reason) {
+  if (!AUTOMATION_CLEANUP_ENABLED) return;
+  void cleanupAutomationData({
+    outputDir: OUTPUT_DIR,
+    logger: (level, message) => appendAutomationApiLog(level, `数据清理（${reason}）：${message}`),
+  }).catch((error) => {
+    const message = `自动化数据清理失败（${reason}）：${error instanceof Error ? error.message : String(error)}`;
+    appendServerLog('ERROR', message);
+    appendAutomationApiLog('ERROR', message);
+  });
+}
+function startAutomationCleanupSchedule() {
+  if (!AUTOMATION_CLEANUP_ENABLED) return;
+  runAutomationCleanup('服务启动');
+  automationCleanupTimer = setInterval(() => runAutomationCleanup('定时任务'), AUTOMATION_CLEANUP_INTERVAL_MS);
+  automationCleanupTimer.unref?.();
 }
 function commandLog(level, message) {
   const line = formatLogMessage(level, message);
@@ -930,6 +951,7 @@ function serveCommand(options) {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    if (automationCleanupTimer) clearInterval(automationCleanupTimer);
     for (const child of ACTIVE_CHILDREN) {
       child.once('close', finishShutdown);
       try { child.kill('SIGTERM'); } catch { /* best effort cleanup */ }
@@ -948,6 +970,7 @@ function serveCommand(options) {
   server.listen(options.port, options.host, () => {
     writeState({ pid: process.pid, port: options.port, host: options.host, startedAt: new Date().toISOString() });
     appendServerLog('INFO', `快速测试页面已启动：${displayAccessUrls(options.host, options.port)}`);
+    startAutomationCleanupSchedule();
     void resumePendingAutomationCallbacks().catch((error) => {
       appendServerLog('ERROR', `恢复待发送回调失败：${error instanceof Error ? error.message : String(error)}`);
     });

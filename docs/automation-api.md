@@ -245,6 +245,17 @@ http://远程电脑IP:4173/videos/订单号-success-时间戳.mp4
 
 API 任务生成的视频实际保存在项目目录下的 `output/videos/`：成功视频位于 `output/videos/success/`，失败视频位于 `output/videos/failed/`。前端快速测试页面仍然使用独立的 `output/quick-test-videos/` 目录。
 
+服务启动时会自动执行一次清理，运行期间默认每 24 小时执行一次。默认保留策略为：成功视频 7 天、失败视频 1 天、回调失败视频 30 天、API 任务记录 30 天、前端测试数据 3 天；日志超过 50MB 会轮转，轮转日志保留 14 天。正在执行、等待回调或发送中的任务不会被清理。
+
+手动预览或执行清理：
+
+```bash
+npm run api:cleanup -- --dry-run
+npm run api:cleanup
+```
+
+可通过 `AUTOMATION_CLEANUP_ENABLED=false` 关闭服务内置定时清理，通过 `AUTOMATION_CLEANUP_INTERVAL_MS` 调整清理间隔（毫秒）。
+
 ## 6. 执行结果回调
 
 正式 API 任务的每条链接执行结束后，脚本服务会调用：

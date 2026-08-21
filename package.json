@@ -21,6 +21,7 @@
     "api:restart": "node scripts/quick-test-server.mjs restart",
     "api:stop": "node scripts/quick-test-server.mjs stop",
     "api:status": "node scripts/quick-test-server.mjs status",
+    "api:cleanup": "node scripts/automation-retention.mjs",
     "quick-test:start": "node scripts/quick-test-server.mjs start",
     "quick-test:restart": "node scripts/quick-test-server.mjs restart",
     "quick-test:stop": "node scripts/quick-test-server.mjs stop",

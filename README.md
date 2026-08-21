@@ -37,6 +37,9 @@ export AUTOMATION_API_KEY='<API服务鉴权密钥>'
 export NW_CALLBACK_URL='<回调接口完整地址>'
 export NW_CALLBACK_API_KEY='<回调接口鉴权密钥>'
 export NW_CALLBACK_TIMEOUT_MS='10000'
+# 可选：默认开启，每 24 小时自动清理一次
+export AUTOMATION_CLEANUP_ENABLED='true'
+export AUTOMATION_CLEANUP_INTERVAL_MS='86400000'
 ```
 
 启动 API 服务：
@@ -70,6 +73,26 @@ API 任务开始、任务异常和回调结果会另外写入：
 
 ```bash
 tail -f 'output/automation-api.log'
+```
+
+服务启动时会执行一次数据清理，运行期间默认每 24 小时执行一次。默认保留策略如下：成功视频 7 天、失败视频 1 天、回调失败视频 30 天、API 任务记录 30 天、前端测试数据 3 天；日志超过 50MB 会轮转，轮转日志保留 14 天。正在执行、等待回调或发送中的任务不会被清理。
+
+手动预览清理结果（不会删除文件）：
+
+```bash
+npm run api:cleanup -- --dry-run
+```
+
+确认后手动执行清理：
+
+```bash
+npm run api:cleanup
+```
+
+如需关闭服务内置定时清理：
+
+```bash
+export AUTOMATION_CLEANUP_ENABLED='false'
 ```
 
 查看状态、重启和停止服务：
