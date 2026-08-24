@@ -1,13 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium, devices, selectors } from '@playwright/test';
-import type { Browser, BrowserContext, Locator, Page } from '@playwright/test';
+import type { Browser, BrowserContext, Frame, Locator, Page } from '@playwright/test';
 import { fillIdentity, fillName, fillPhone } from './human-input';
 import { hasValidIdentityChecksum } from './identity';
 import { byTestId, getSuccessToast, LOCATORS } from './locators';
 import { createMobileBrowseBehavior, isLocatorInViewport } from './mobile-browse';
 import type { LocatorTestId } from './locators';
-import { createSeededRandom, pick, randomBetween } from './random';
+import { createSeededRandom, pick, randomBetween, randomInteger } from './random';
 import { finalizeVideo } from './video-manager';
 import type { AutomationOptions, HumanBrowseBehavior, OrderInput, RunResult } from './types';
 import { formatDuration, logger } from './logger';
@@ -19,7 +19,20 @@ const sleep = (durationMs: number) => new Promise((resolvePromise) => setTimeout
 const mark = (message: string) => logger.info(`· ${message}`);
 const readingOverlayTriggerMs = 2_000;
 const readingWaitPollMs = 100;
-const readingOverlayDismissChance = 0.35;
+const readingOverlayDismissChance = 0.9;
+const readingOverlayReactionMinMs = 500;
+const readingOverlayReactionMaxMs = 2_000;
+const readingOverlayAfterDismissMinMs = 500;
+const readingOverlayAfterDismissMaxMs = 1_000;
+const readingPopupInitialBrowseMinMs = 500;
+const readingPopupInitialBrowseMaxMs = 1_500;
+const agreementPopupBrowseChance = 0.4;
+const agreementAfterOverlayDirectChance = 0.25;
+const agreementAfterOverlayContinueChance = 0.25;
+const agreementBrowseAfterTabSwitchChance = 0.8;
+const agreementPostOverlayBrowseMinMs = 2_000;
+const agreementPostOverlayBrowseMaxMs = 5_000;
+const agreementSecondaryOverlayMaxOccurrences = 3;
 const firstOrderDirectPathChance = 0.8;
 const firstOrderAgreementOnlyPathChance = 0.15;
 const firstOrderPageBrowseMinMs = 4_000;
@@ -32,6 +45,49 @@ const BROWSE_PROFILES = ['skimmer', 'reader', 'distracted'] as const;
 
 type FirstOrderPreButtonPath = 'direct' | 'agreement-only' | 'full';
 type RepeatOrderAgreementPath = 'direct' | 'browse-agreement';
+type AgreementAfterOverlayBehavior = 'direct' | 'continue-current' | 'switch-tabs';
+type AgreementTabBrowseTotal = 2 | 3 | 4;
+
+type PopupBox = { x: number; y: number; width: number; height: number };
+
+type PopupScrollBox = PopupBox & {
+  tagName: string;
+  className: string;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+};
+
+type PopupScrollCandidate = {
+  tagName: string;
+  className: string;
+  scrollRange: number;
+  containsAction: boolean;
+};
+
+type PopupTab = PopupBox & {
+  label: string;
+  active: boolean;
+};
+
+type AgreementPopupUi = {
+  scrollBox: PopupScrollBox | null;
+  gestureBox: PopupBox | null;
+  contentSignature: string;
+  tabs: PopupTab[];
+  scrollCandidates: PopupScrollCandidate[];
+};
+
+type InterruptibleAgreementBrowseOptions = {
+  durationMs: number;
+  maxOverlayOccurrences: number;
+  now: () => number;
+  browseOnce: () => Promise<boolean>;
+  isOverlayVisible: () => Promise<boolean>;
+  dismissOverlay: () => Promise<boolean>;
+  wait: (durationMs: number) => Promise<unknown>;
+  nextPauseMs: () => number;
+};
 
 export function chooseFirstOrderPreButtonPath(
   random: () => number,
@@ -55,6 +111,36 @@ export function chooseRandomBrowseProfile(random: () => number) {
 
 export function chooseRepeatOrderAgreementPath(random: () => number): RepeatOrderAgreementPath {
   return random() < repeatOrderDirectPathChance ? 'direct' : 'browse-agreement';
+}
+
+export function chooseAgreementPopupBrowse(random: () => number): boolean {
+  return random() < agreementPopupBrowseChance;
+}
+
+export function chooseAgreementAfterOverlayBehavior(
+  random: () => number,
+): AgreementAfterOverlayBehavior {
+  const roll = random();
+  if (roll < agreementAfterOverlayDirectChance) return 'direct';
+  if (roll < agreementAfterOverlayDirectChance + agreementAfterOverlayContinueChance) {
+    return 'continue-current';
+  }
+  return 'switch-tabs';
+}
+
+export function chooseAgreementBrowseAfterTabSwitch(random: () => number): boolean {
+  return random() < agreementBrowseAfterTabSwitchChance;
+}
+
+/**
+ * 选择包含初始 TAB 在内的总浏览数：2 / 3 / 4 = 62.5% / 25% / 12.5%。
+ * 结合关闭蒙层后的三类行为，整体约为 1 / 2 / 3 / 4 个 TAB = 60% / 25% / 10% / 5%。
+ */
+export function chooseAgreementTabBrowseTotal(random: () => number): AgreementTabBrowseTotal {
+  const roll = random();
+  if (roll < 0.625) return 2;
+  if (roll < 0.875) return 3;
+  return 4;
 }
 
 function assertBrowserLaunchAllowed() {
@@ -104,12 +190,16 @@ async function hasInViewport(locator: Locator): Promise<boolean> {
   return false;
 }
 
+async function readingMaskIsVisible(page: Page): Promise<boolean> {
+  return hasVisible(page.locator('.mask'));
+}
+
 async function readingOverlayIsVisible(page: Page, closeTestId?: LocatorTestId): Promise<boolean> {
   const closeVisible = closeTestId
     ? await hasVisible(byTestId(page, closeTestId))
     : false;
   // 真实页面的等待蒙层使用 class="mask"，不一定带 close test id。
-  return closeVisible || await hasVisible(page.locator('.mask'));
+  return closeVisible || await readingMaskIsVisible(page);
 }
 
 async function clickTestId(
@@ -208,6 +298,53 @@ async function clickIfAppears(page: Page, testId: LocatorTestId, timeoutMs = 10_
   );
 }
 
+async function dismissReadingOverlay(
+  page: Page,
+  closeTestId: LocatorTestId,
+  step: string,
+) {
+  const maskTargets = await visibleLocators(page.locator('.mask'));
+  const closeLocators = [
+    byTestId(page, closeTestId),
+    // 真实页面的协议/产品弹窗关闭按钮使用 Vant 的 class，没有 jing-testid。
+    page.locator('.van-popup__close-icon'),
+    page.locator('[class*="van-popup__close"]'),
+  ];
+  const closeTargets: Locator[] = [];
+  for (const locator of closeLocators) {
+    closeTargets.push(...await visibleLocators(locator));
+  }
+  // 阅读提示蒙层本身是可点击关闭的；必须优先处理它，不能误点弹窗右上角 X。
+  const visibleTargets = [...maskTargets.reverse(), ...closeTargets.reverse()];
+  if (visibleTargets.length === 0) {
+    mark(`${step}：未找到可见的蒙层关闭按钮`);
+    return false;
+  }
+
+  let lastError: unknown;
+  for (const target of visibleTargets) {
+    try {
+      await target.click({ timeout: 500 });
+      if (!await hasVisible(page.locator('.mask'))) return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  // 蒙层可能正处于动画或遮挡按钮；当前按钮已确认可见时允许 force click。
+  for (const target of visibleTargets) {
+    try {
+      await target.click({ timeout: 500, force: true });
+      if (!await hasVisible(page.locator('.mask'))) return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  mark(`${step}：关闭蒙层失败，${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  return false;
+}
+
 async function waitForAnyVisible(locator: Locator, timeoutMs: number, step = '目标元素'): Promise<Locator> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -234,26 +371,77 @@ async function waitWhileBrowsing(
   minMs: number,
   maxMs: number,
   step: string,
+  hooks: {
+    onBrowse?: () => Promise<boolean>;
+    onOverlayDismiss?: () => Promise<{
+      browseConfirmed?: boolean;
+      finishBrowsing?: boolean;
+    }>;
+  } = {},
 ) {
   const durationMs = Math.round(randomBetween(random, minMs, maxMs));
   const startedAt = Date.now();
   let overlayDetected = false;
   let overlayDismissed = false;
+  let browseConfirmed = false;
+  const initialBrowseDelay = hooks.onBrowse
+    ? Math.round(randomBetween(random, readingPopupInitialBrowseMinMs, readingPopupInitialBrowseMaxMs))
+    : 0;
+  if (initialBrowseDelay > 0) {
+    mark(`${step}：协议弹窗出现后先停留 ${Math.round(initialBrowseDelay / 10) / 100} 秒`);
+  }
+  let nextBrowseAt = startedAt + initialBrowseDelay;
+  let overlayObservationDeadline = startedAt + durationMs;
 
-  while (Date.now() - startedAt < durationMs) {
+  while (
+    Date.now() - startedAt < durationMs
+    || Boolean(
+      hooks.onOverlayDismiss
+      && browseConfirmed
+      && !overlayDetected
+      && Date.now() < overlayObservationDeadline
+    )
+  ) {
     const elapsedMs = Date.now() - startedAt;
+
+    const maskAlreadyVisible = elapsedMs >= readingOverlayTriggerMs
+      && await readingMaskIsVisible(page);
+    if (
+      hooks.onBrowse
+      && !overlayDetected
+      && !maskAlreadyVisible
+      && elapsedMs < durationMs
+      && Date.now() >= nextBrowseAt
+    ) {
+      browseConfirmed = (await hooks.onBrowse()) || browseConfirmed;
+      nextBrowseAt = Date.now() + Math.round(randomBetween(random, 700, 1_400));
+      // 一次真人滚动本身可能超过原浏览预算；给蒙层动画留出短暂观察窗口。
+      overlayObservationDeadline = Math.max(overlayObservationDeadline, Date.now() + 800);
+    }
+
     if (!overlayDetected && elapsedMs >= readingOverlayTriggerMs) {
       overlayDetected = await readingOverlayIsVisible(page, overlayClose);
       if (overlayDetected) {
         mark(`${step}：浏览等待超过 ${readingOverlayTriggerMs / 1_000} 秒，检测到蒙层`);
-        // 模拟一部分用户会主动关闭蒙层，再继续浏览一会儿。
+        // 模拟大多数用户发现蒙层后主动关闭，再继续浏览一会儿。
         if (random() < readingOverlayDismissChance) {
-          const close = byTestId(page, overlayClose);
           try {
-            await close.click({ timeout: 1_500 });
-            overlayDismissed = true;
-            mark(`${step}：用户关闭蒙层，继续浏览后再点击按钮`);
-            await pauseAfterStep(random);
+            await waitConfigured(random, readingOverlayReactionMinMs, readingOverlayReactionMaxMs);
+            const dismissed = await dismissReadingOverlay(page, overlayClose, step);
+            if (dismissed) {
+              overlayDismissed = true;
+              mark(`${step}：用户快速关闭蒙层`);
+              await waitConfigured(
+                random,
+                readingOverlayAfterDismissMinMs,
+                readingOverlayAfterDismissMaxMs,
+              );
+              if (hooks.onOverlayDismiss) {
+                const result = await hooks.onOverlayDismiss();
+                browseConfirmed = Boolean(result.browseConfirmed) || browseConfirmed;
+                if (result.finishBrowsing) return { browseConfirmed };
+              }
+            }
           } catch {
             // 蒙层可能已被页面或用户关闭；后续按钮点击仍按容错路径处理。
           }
@@ -262,12 +450,681 @@ async function waitWhileBrowsing(
     }
 
     const remainingMs = durationMs - (Date.now() - startedAt);
-    await sleep(Math.min(readingWaitPollMs, Math.max(remainingMs, 0)));
+    await sleep(remainingMs > 0
+      ? Math.min(readingWaitPollMs, remainingMs)
+      : readingWaitPollMs);
   }
 
   if (overlayDetected && !overlayDismissed) {
     mark(`${step}：蒙层不阻断后续按钮点击，继续完成浏览等待`);
   }
+
+  return { browseConfirmed };
+}
+
+/**
+ * 读取协议弹窗内的可滚动区域和 TAB。
+ *
+ * 协议弹窗的业务页面没有统一暴露 TAB/内容容器 test id，因此从协议确认按钮
+ * 和关闭按钮的共同祖先开始探测，兼容 role、class 和 test id 等常见写法。
+ */
+async function getAgreementPopupUi(page: Page): Promise<AgreementPopupUi> {
+  return page.evaluate(({ agreementContinue, agreementClose }) => {
+    const continueElement = document.querySelector(`[jing-testid="${agreementContinue}"]`);
+    const closeElement = document.querySelector(`[jing-testid="${agreementClose}"]`);
+    if (!continueElement) {
+      return {
+        scrollBox: null,
+        gestureBox: null,
+        contentSignature: '',
+        tabs: [],
+        scrollCandidates: [],
+      };
+    }
+
+    const continueHtmlElement = continueElement as HTMLElement;
+    const continueRect = continueHtmlElement.getBoundingClientRect();
+    const continueStyle = window.getComputedStyle(continueHtmlElement);
+    if (
+      continueRect.width <= 0
+      || continueRect.height <= 0
+      || continueStyle.display === 'none'
+      || continueStyle.visibility === 'hidden'
+    ) {
+      return {
+        scrollBox: null,
+        gestureBox: null,
+        contentSignature: '',
+        tabs: [],
+        scrollCandidates: [],
+      };
+    }
+
+    let popupRoot: Element = continueElement;
+    while (popupRoot.parentElement && (!closeElement || !popupRoot.contains(closeElement))) {
+      popupRoot = popupRoot.parentElement;
+    }
+
+    const descendants = [popupRoot, ...Array.from(popupRoot.querySelectorAll('*'))];
+    let scrollBox: PopupScrollBox | null = null;
+    let largestScrollRange = 12;
+    const tabs: PopupTab[] = [];
+    const scrollCandidates: PopupScrollCandidate[] = [];
+
+    for (const element of descendants) {
+      const htmlElement = element as HTMLElement;
+      const rect = htmlElement.getBoundingClientRect();
+      const style = window.getComputedStyle(htmlElement);
+      const visible = rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden';
+      if (!visible) continue;
+
+      const scrollRange = htmlElement.scrollHeight - htmlElement.clientHeight;
+      const containsAction = element.contains(continueElement)
+        || Boolean(closeElement && element.contains(closeElement));
+      if (scrollRange > 0) {
+        scrollCandidates.push({
+          tagName: htmlElement.tagName,
+          className: typeof htmlElement.className === 'string' ? htmlElement.className : '',
+          scrollRange,
+          containsAction,
+        });
+      }
+      if (scrollRange > largestScrollRange && !containsAction && style.overflowY !== 'hidden') {
+        largestScrollRange = scrollRange;
+        scrollBox = {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          tagName: htmlElement.tagName,
+          className: typeof htmlElement.className === 'string' ? htmlElement.className : '',
+          scrollTop: htmlElement.scrollTop,
+          scrollHeight: htmlElement.scrollHeight,
+          clientHeight: htmlElement.clientHeight,
+        };
+      }
+
+      if (element === continueElement || element === closeElement) continue;
+      const testId = htmlElement.getAttribute('jing-testid')?.toLowerCase() ?? '';
+      const dataTestId = htmlElement.getAttribute('data-testid')?.toLowerCase() ?? '';
+      const className = typeof htmlElement.className === 'string'
+        ? htmlElement.className.toLowerCase()
+        : '';
+      const role = htmlElement.getAttribute('role')?.toLowerCase() ?? '';
+      const looksLikeTab = role === 'tab'
+        || testId.includes('tab')
+        || dataTestId.includes('tab')
+        || className.includes('tab');
+      const label = (htmlElement.innerText || htmlElement.textContent || '').trim();
+      if (!looksLikeTab || label.length === 0) continue;
+
+      tabs.push({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        label,
+        active: htmlElement.getAttribute('aria-selected') === 'true'
+          || className.includes('active')
+          || className.includes('selected')
+          || className.includes('current'),
+      });
+    }
+
+    // 父子 TAB 容器可能同时命中 class="tab"，只保留最小的可点击节点。
+    const topLevelTabs: PopupTab[] = [];
+    for (let index = 0; index < tabs.length; index += 1) {
+      const tab = tabs[index];
+      let nested = false;
+      for (let otherIndex = 0; otherIndex < tabs.length; otherIndex += 1) {
+        if (otherIndex === index) continue;
+        const other = tabs[otherIndex];
+        if (
+          other.x >= tab.x
+          && other.y >= tab.y
+          && other.x + other.width <= tab.x + tab.width
+          && other.y + other.height <= tab.y + tab.height
+          && (other.width < tab.width || other.height < tab.height)
+        ) {
+          nested = true;
+          break;
+        }
+      }
+      if (!nested) topLevelTabs.push(tab);
+    }
+
+    const popupRect = (popupRoot as HTMLElement).getBoundingClientRect();
+    const continueBottom = continueRect.y;
+    let contentTop = popupRect.y + 20;
+    for (const tab of topLevelTabs) {
+      contentTop = Math.max(contentTop, tab.y + tab.height + 8);
+    }
+    const gestureBox = continueBottom - contentTop > 80
+      ? {
+        x: popupRect.x,
+        y: contentTop,
+        width: popupRect.width,
+        height: continueBottom - contentTop,
+      }
+      : null;
+
+    const contentParts: string[] = [];
+    const contentElements = popupRoot.querySelectorAll('h1, h2, h3, h4, p, li');
+    for (const element of contentElements) {
+      const htmlElement = element as HTMLElement;
+      const rect = htmlElement.getBoundingClientRect();
+      const text = (htmlElement.innerText || htmlElement.textContent || '').trim().replace(/\s+/g, ' ');
+      if (
+        text.length > 2
+        && rect.width > 0
+        && rect.height > 0
+        && rect.top >= contentTop - 20
+        && rect.bottom <= continueBottom + 20
+      ) {
+        contentParts.push(`${text.slice(0, 36)}@${Math.round(rect.top)}`);
+        if (contentParts.length >= 8) break;
+      }
+    }
+
+    return {
+      scrollBox,
+      gestureBox,
+      contentSignature: contentParts.join('|'),
+      tabs: topLevelTabs,
+      scrollCandidates,
+    };
+  }, {
+    agreementContinue: LOCATORS.agreementContinue,
+    agreementClose: LOCATORS.agreementClose,
+  });
+}
+
+async function scrollAgreementPopupContent(
+  page: Page,
+  random: () => number,
+  step: string,
+) {
+  const beforeUi = await getAgreementPopupUi(page);
+  const { scrollBox } = beforeUi;
+  const gestureBox = scrollBox ?? beforeUi.gestureBox;
+  if (!gestureBox) {
+    const candidates = beforeUi.scrollCandidates
+      .map((candidate) => `${candidate.tagName}.${candidate.className || '无 class'}=${candidate.scrollRange}${candidate.containsAction ? '(含按钮)' : ''}`)
+      .join('，');
+    mark(`${step}：未找到协议正文滚动容器${candidates ? `，候选：${candidates}` : ''}`);
+    return false;
+  }
+
+  const distance = Math.round(randomBetween(random, gestureBox.height * 0.28, gestureBox.height * 0.55));
+  const duration = Math.round(randomBetween(random, 450, 900));
+  const chunks = randomBetween(random, 0, 1) < 0.35 ? 3 : 2;
+  const chunkDuration = duration / chunks;
+  const x = gestureBox.x + gestureBox.width / 2;
+  const startY = gestureBox.y + gestureBox.height * 0.68;
+  const endY = Math.max(gestureBox.y + gestureBox.height * 0.25, startY - distance);
+
+  // 协议正文在 iframe 中时直接走 iframe 的分段滚动；避免先对外层弹窗发触摸事件，
+  // 造成首次浏览出现突兀跳动，再由 iframe 兜底修正。
+  const iframeScrolled = await scrollAgreementIframe(page, distance, random, step);
+  if (iframeScrolled) return true;
+  if (await readingMaskIsVisible(page)) return false;
+
+  // 移动端协议弹窗通常不响应 wheel，使用 CDP 触摸事件模拟真实手指上滑。
+  const client = await page.context().newCDPSession(page);
+  let touchInterrupted = false;
+  try {
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x, y: startY, id: 1 }],
+    });
+    for (let chunk = 0; chunk < chunks; chunk += 1) {
+      if (await readingMaskIsVisible(page)) {
+        touchInterrupted = true;
+        mark(`${step}：蒙层出现，立即停止协议触摸滑动`);
+        break;
+      }
+      const progress = (chunk + 1) / chunks;
+      await client.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x, y: startY + (endY - startY) * progress, id: 1 }],
+      });
+      await sleep(chunkDuration);
+    }
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+    });
+  } finally {
+    await client.detach();
+  }
+
+  const afterUi = await getAgreementPopupUi(page);
+  const afterScrollTop = afterUi.scrollBox?.scrollTop ?? 0;
+  const scrollChanged = Boolean(scrollBox && afterScrollTop > scrollBox.scrollTop + 1);
+  const contentChanged = Boolean(
+    beforeUi.contentSignature
+    && afterUi.contentSignature
+    && beforeUi.contentSignature !== afterUi.contentSignature,
+  );
+  if (touchInterrupted && !scrollChanged && !contentChanged) return false;
+  if (!scrollChanged && !contentChanged) {
+    const targetDescription = scrollBox
+      ? `${scrollBox.tagName}.${scrollBox.className || '无 class'}，${scrollBox.scrollTop}/${scrollBox.scrollHeight - scrollBox.clientHeight}`
+      : `触摸区域 ${Math.round(gestureBox.x)},${Math.round(gestureBox.y)},${Math.round(gestureBox.width)}x${Math.round(gestureBox.height)}`;
+    const iframeLocator = page.locator('iframe');
+    const iframeDescriptions: string[] = [];
+    const iframeCount = await iframeLocator.count();
+    for (let index = 0; index < iframeCount; index += 1) {
+      const iframe = iframeLocator.nth(index);
+      if (!await iframe.isVisible().catch(() => false)) continue;
+      const box = await iframe.boundingBox().catch(() => null);
+      const src = await iframe.getAttribute('src').catch(() => null);
+      if (box) iframeDescriptions.push(`${src || '无 src'}@${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)}x${Math.round(box.height)}`);
+    }
+    const frameUrls = page.frames().map((frame) => frame.url()).filter(Boolean).join(' | ');
+    mark(`${step}：协议内容触摸滑动未改变内容位置（${targetDescription}；iframe=${iframeDescriptions.join('，') || '无'}；frames=${frameUrls || '无'}）`);
+    return false;
+  }
+  mark(`${step}：滑动协议内容浏览`);
+  return true;
+}
+
+async function stopAgreementScrollWhenMasked(
+  page: Page,
+  agreementFrame: Frame,
+  currentY: number,
+  step: string,
+) {
+  if (!await readingMaskIsVisible(page)) return false;
+  await agreementFrame.evaluate((targetY) => {
+    document.documentElement.style.scrollBehavior = 'auto';
+    if (document.body) document.body.style.scrollBehavior = 'auto';
+    window.scrollTo(0, targetY);
+  }, currentY).catch(() => undefined);
+  mark(`${step}：蒙层出现，立即停止协议滚动`);
+  return true;
+}
+
+async function scrollAgreementIframe(page: Page, distance: number, random: () => number, step: string) {
+  let agreementFrame: Frame | undefined;
+  const iframeLocator = page.locator('iframe');
+  const iframeCount = await iframeLocator.count();
+  for (let index = 0; index < iframeCount && !agreementFrame; index += 1) {
+    const iframe = iframeLocator.nth(index);
+    if (!await iframe.isVisible().catch(() => false)) continue;
+    const src = await iframe.getAttribute('src').catch(() => null);
+    const box = await iframe.boundingBox().catch(() => null);
+    if (!box || box.width <= 0 || box.height <= 0) continue;
+    agreementFrame = page.frames().find((frame) => (
+      frame !== page.mainFrame()
+      && (!src || frame.url().includes(src))
+    ));
+  }
+  if (!agreementFrame) {
+    agreementFrame = page.frames().find((frame) => frame !== page.mainFrame() && Boolean(frame.url()));
+  }
+  if (!agreementFrame) return false;
+
+  try {
+    if (await readingMaskIsVisible(page)) return false;
+    const before = await agreementFrame.evaluate(() => ({
+      y: window.scrollY || document.scrollingElement?.scrollTop || 0,
+      maxY: Math.max(
+        0,
+        (document.scrollingElement?.scrollHeight ?? 0)
+          - (document.scrollingElement?.clientHeight ?? window.innerHeight),
+      ),
+    }));
+    await agreementFrame.evaluate(() => {
+      document.documentElement.style.scrollBehavior = 'auto';
+      if (document.body) document.body.style.scrollBehavior = 'auto';
+    });
+
+    // 参考 mobile-browse：按当前阅读位置决定继续下滑或小幅回滑，避免每次都机械下滚。
+    const canScrollDown = before.y < before.maxY - 4;
+    const canBacktrack = before.y > 4;
+    const direction = canScrollDown || !canBacktrack ? 1 : -1;
+    const travel = direction > 0
+      ? Math.min(distance, before.maxY - before.y)
+      : -Math.min(distance * randomBetween(random, 0.18, 0.36), before.y);
+    if (Math.abs(travel) < 2) {
+      await sleep(Math.round(randomBetween(random, 700, 1_600)));
+      return false;
+    }
+
+    const duration = randomBetween(random, 700, 1_500);
+    const chunks = randomInteger(random, 2, 3);
+    const chunkDuration = duration / chunks;
+    let currentY = before.y;
+
+    for (let chunk = 0; chunk < chunks; chunk += 1) {
+      const chunkSteps = randomInteger(random, 12, 18);
+      const chunkStartY = currentY;
+      const chunkTargetY = before.y + travel * ((chunk + 1) / chunks);
+      for (let gestureStep = 1; gestureStep <= chunkSteps; gestureStep += 1) {
+        if (
+          (gestureStep === 1 || gestureStep % 2 === 0)
+          && await stopAgreementScrollWhenMasked(page, agreementFrame, currentY, step)
+        ) {
+          return Math.abs(currentY - before.y) > 1;
+        }
+        const progress = gestureStep / chunkSteps;
+        const eased = 1 - Math.pow(1 - progress, 2);
+        currentY = chunkStartY + (chunkTargetY - chunkStartY) * eased;
+        await agreementFrame.evaluate((targetY) => {
+          window.scrollTo(0, targetY);
+        }, currentY);
+        await sleep(chunkDuration / chunkSteps);
+      }
+      if (chunk < chunks - 1) {
+        await sleep(Math.round(randomBetween(random, 500, 1_200)));
+      }
+    }
+
+    // 少量用户会回看刚刚掠过的内容，再继续阅读。
+    if (direction > 0 && random() < 0.18 && currentY > 8) {
+      const backtrack = Math.min(
+        currentY,
+        Math.round(randomBetween(random, 0.08 * distance, 0.16 * distance)),
+      );
+      const backtrackSteps = randomInteger(random, 8, 13);
+      const backtrackStartY = currentY;
+      for (let gestureStep = 1; gestureStep <= backtrackSteps; gestureStep += 1) {
+        if (
+          (gestureStep === 1 || gestureStep % 2 === 0)
+          && await stopAgreementScrollWhenMasked(page, agreementFrame, currentY, step)
+        ) {
+          return Math.abs(currentY - before.y) > 1;
+        }
+        const progress = gestureStep / backtrackSteps;
+        const eased = 1 - Math.pow(1 - progress, 2);
+        currentY = backtrackStartY - backtrack * eased;
+        await agreementFrame.evaluate((targetY) => {
+          window.scrollTo(0, targetY);
+        }, currentY);
+        await sleep(randomBetween(random, 35, 75));
+      }
+      await sleep(Math.round(randomBetween(random, 400, 1_000)));
+    }
+
+    // 手势结束后模拟停下来阅读，而不是立即触发下一次滚动。
+    await sleep(Math.round(randomBetween(random, 700, 1_800)));
+    const after = await agreementFrame.evaluate(() => ({
+      y: window.scrollY || document.scrollingElement?.scrollTop || 0,
+    }));
+    const changed = Math.abs(after.y - before.y) > 1;
+    if (changed) mark(`${step}：iframe 协议正文已滚动（${agreementFrame.url()}）`);
+    return changed;
+  } catch {
+    return false;
+  }
+}
+
+async function switchAgreementTab(
+  page: Page,
+  random: () => number,
+  step: string,
+  visitedLabels: ReadonlySet<string>,
+): Promise<PopupTab | null> {
+  const beforeUi = await getAgreementPopupUi(page);
+  const { tabs } = beforeUi;
+  const viewport = page.viewportSize() ?? iPhone15Screen;
+  const availableTabs = tabs.filter((tab) => (
+    !tab.active
+    && !visitedLabels.has(tab.label)
+    && tab.x + tab.width / 2 > 8
+    && tab.x + tab.width / 2 < viewport.width - 8
+    && tab.y + tab.height / 2 > 0
+    && tab.y + tab.height / 2 < viewport.height
+  ));
+  if (availableTabs.length === 0) {
+    mark(`${step}：当前视口未找到新的可切换协议 TAB（tabs=${tabs.length}）`);
+    return null;
+  }
+
+  const target = pick(random, availableTabs);
+  const beforeFrameSignature = page.frames()
+    .filter((frame) => frame !== page.mainFrame())
+    .map((frame) => frame.url())
+    .join('|');
+  // 目标中心已确认在手机视口内，直接按当前坐标点击，避免 Locator.click 的
+  // scrollIntoView 把横向 TAB 栏突兀地滚到其他位置。
+  await page.mouse.click(target.x + target.width / 2, target.y + target.height / 2);
+  await waitConfigured(random, 500, 1_000);
+  let afterClickUi = await getAgreementPopupUi(page);
+  let targetActive = afterClickUi.tabs.some((tab) => tab.label === target.label && tab.active);
+  let afterFrameSignature = page.frames()
+    .filter((frame) => frame !== page.mainFrame())
+    .map((frame) => frame.url())
+    .join('|');
+  let contentChanged = beforeFrameSignature !== afterFrameSignature;
+  if (!targetActive && !contentChanged) {
+    const domClicked = await page.evaluate(({ label, x, y }) => {
+      const candidates = Array.from(document.querySelectorAll('[role="tab"], [class*="tab"]'))
+        .filter((element) => {
+          const htmlElement = element as HTMLElement;
+          const rect = htmlElement.getBoundingClientRect();
+          const text = (htmlElement.innerText || htmlElement.textContent || '').trim();
+          const style = window.getComputedStyle(htmlElement);
+          return text === label
+            && rect.width > 0
+            && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden';
+        })
+        .sort((left, right) => {
+          const leftRect = (left as HTMLElement).getBoundingClientRect();
+          const rightRect = (right as HTMLElement).getBoundingClientRect();
+          const leftDistance = Math.hypot(
+            leftRect.x + leftRect.width / 2 - x,
+            leftRect.y + leftRect.height / 2 - y,
+          );
+          const rightDistance = Math.hypot(
+            rightRect.x + rightRect.width / 2 - x,
+            rightRect.y + rightRect.height / 2 - y,
+          );
+          return leftDistance - rightDistance;
+        });
+      const candidate = candidates[0] as HTMLElement | undefined;
+      if (!candidate) return false;
+      candidate.click();
+      return true;
+    }, {
+      label: target.label,
+      x: target.x + target.width / 2,
+      y: target.y + target.height / 2,
+    });
+    if (domClicked) {
+      await sleep(800);
+      afterClickUi = await getAgreementPopupUi(page);
+      targetActive = afterClickUi.tabs.some((tab) => tab.label === target.label && tab.active);
+      afterFrameSignature = page.frames()
+        .filter((frame) => frame !== page.mainFrame())
+        .map((frame) => frame.url())
+        .join('|');
+      contentChanged = beforeFrameSignature !== afterFrameSignature;
+    }
+  }
+  if (!targetActive && !contentChanged) {
+    mark(`${step}：TAB「${target.label}」点击后未确认切换生效`);
+    return null;
+  }
+  mark(`${step}：切换协议 TAB「${target.label}」`);
+  return target;
+}
+
+/**
+ * 按有效浏览时长执行 TAB 阅读。蒙版存在期间暂停计时，关闭后从当前 TAB 继续。
+ * 关闭连续失败时抛错，避免在蒙版下无限空转或穿透操作。
+ */
+export async function runInterruptibleAgreementBrowse(
+  options: InterruptibleAgreementBrowseOptions,
+) {
+  let remainingMs = Math.max(0, options.durationMs);
+  let browseConfirmed = false;
+  let overlayDismissals = 0;
+  let overlayOccurrences = 0;
+
+  const consumeActiveTime = (startedAt: number, fallbackMs = 0) => {
+    const elapsedMs = Math.max(fallbackMs, options.now() - startedAt);
+    remainingMs = Math.max(0, remainingMs - elapsedMs);
+    return elapsedMs;
+  };
+
+  while (remainingMs > 0) {
+    if (await options.isOverlayVisible()) {
+      if (overlayOccurrences >= options.maxOverlayOccurrences) {
+        throw new Error(
+          `二次蒙版处理已达 ${options.maxOverlayOccurrences} 次上限，停止 TAB 浏览`,
+        );
+      }
+      overlayOccurrences += 1;
+      const dismissed = await options.dismissOverlay();
+      if (dismissed) {
+        overlayDismissals += 1;
+      }
+      continue;
+    }
+
+    const browseStartedAt = options.now();
+    browseConfirmed = await options.browseOnce() || browseConfirmed;
+    consumeActiveTime(browseStartedAt);
+    if (remainingMs <= 0) break;
+
+    // 滚动期间也可能弹出蒙版；先进入下一轮蒙版处理，不再发起新滚动。
+    if (await options.isOverlayVisible()) continue;
+
+    let pauseRemainingMs = Math.min(
+      remainingMs,
+      Math.max(0, options.nextPauseMs()),
+    );
+    while (pauseRemainingMs > 0) {
+      if (await options.isOverlayVisible()) break;
+      const sliceMs = Math.min(readingWaitPollMs, pauseRemainingMs);
+      const pauseStartedAt = options.now();
+      await options.wait(sliceMs);
+      const consumedMs = consumeActiveTime(pauseStartedAt, sliceMs);
+      pauseRemainingMs = Math.max(0, pauseRemainingMs - consumedMs);
+      if (remainingMs <= 0) break;
+    }
+  }
+
+  return { browseConfirmed, overlayDismissals };
+}
+
+async function browseAgreementForDuration(
+  page: Page,
+  random: () => number,
+  step: string,
+  context: string,
+) {
+  const durationMs = Math.round(randomBetween(
+    random,
+    agreementPostOverlayBrowseMinMs,
+    agreementPostOverlayBrowseMaxMs,
+  ));
+  mark(`${step}：${context} ${Math.round(durationMs / 100) / 10} 秒`);
+  const result = await runInterruptibleAgreementBrowse({
+    durationMs,
+    maxOverlayOccurrences: agreementSecondaryOverlayMaxOccurrences,
+    now: Date.now,
+    browseOnce: () => scrollAgreementPopupContent(page, random, step),
+    isOverlayVisible: () => readingMaskIsVisible(page),
+    dismissOverlay: async () => {
+      mark(`${step}：二次蒙版出现，暂停当前 TAB 浏览`);
+      await waitConfigured(random, readingOverlayReactionMinMs, readingOverlayReactionMaxMs);
+      const dismissed = await dismissReadingOverlay(
+        page,
+        LOCATORS.agreementClose,
+        `${step}二次蒙版`,
+      );
+      if (dismissed) {
+        await waitConfigured(
+          random,
+          readingOverlayAfterDismissMinMs,
+          readingOverlayAfterDismissMaxMs,
+        );
+        mark(`${step}：二次蒙版已关闭，继续浏览当前 TAB`);
+      }
+      return dismissed;
+    },
+    wait: sleep,
+    nextPauseMs: () => Math.round(randomBetween(random, 400, 900)),
+  });
+
+  return result.browseConfirmed;
+}
+
+async function handleAgreementAfterOverlayDismiss(
+  page: Page,
+  random: () => number,
+  step: string,
+) {
+  const behavior = chooseAgreementAfterOverlayBehavior(random);
+  if (behavior === 'direct') {
+    mark(`${step}：关闭蒙层后直接点击同意并继续`);
+    return { browseConfirmed: false, finishBrowsing: true };
+  }
+
+  if (behavior === 'continue-current') {
+    const browseConfirmed = await browseAgreementForDuration(
+      page,
+      random,
+      step,
+      '关闭蒙层后继续浏览当前协议',
+    );
+    return { browseConfirmed, finishBrowsing: true };
+  }
+
+  mark(`${step}：关闭蒙层后已停留 0.5–1 秒，准备切换 TAB`);
+
+  const currentUi = await getAgreementPopupUi(page);
+  const viewport = page.viewportSize() ?? iPhone15Screen;
+  const currentTab = currentUi.tabs.find((tab) => tab.active)
+    ?? currentUi.tabs.find((tab) => (
+      tab.x < viewport.width
+      && tab.x + tab.width > 0
+      && tab.y < viewport.height
+      && tab.y + tab.height > 0
+    ));
+  const visitedLabels = new Set<string>();
+  if (currentTab) visitedLabels.add(currentTab.label);
+
+  const firstTarget = await switchAgreementTab(page, random, step, visitedLabels);
+  if (!firstTarget) return { browseConfirmed: false, finishBrowsing: true };
+  visitedLabels.add(firstTarget.label);
+
+  if (!chooseAgreementBrowseAfterTabSwitch(random)) {
+    mark(`${step}：切换 TAB 后不再浏览，直接点击同意并继续`);
+    return { browseConfirmed: false, finishBrowsing: true };
+  }
+
+  const targetTotal = chooseAgreementTabBrowseTotal(random);
+  let browseConfirmed = await browseAgreementForDuration(
+    page,
+    random,
+    step,
+    `浏览 TAB「${firstTarget.label}」`,
+  );
+
+  while (visitedLabels.size < targetTotal) {
+    await waitConfigured(random, 350, 800);
+    const nextTarget = await switchAgreementTab(page, random, step, visitedLabels);
+    if (!nextTarget) break;
+    visitedLabels.add(nextTarget.label);
+    browseConfirmed = await browseAgreementForDuration(
+      page,
+      random,
+      step,
+      `浏览 TAB「${nextTarget.label}」`,
+    ) || browseConfirmed;
+  }
+
+  mark(`${step}：本次共浏览 ${visitedLabels.size} 个不同 TAB，准备点击同意并继续`);
+  return { browseConfirmed, finishBrowsing: true };
 }
 
 async function waitConfigured(random: () => number, minMs: number, maxMs: number) {
@@ -384,15 +1241,41 @@ async function runAgreementAndProductFlow(
 ) {
   // 主按钮已经触发协议弹窗，模拟用户阅读/浏览后再继续。
   if (options.waitAgreement) {
+    await waitForAnyVisible(
+      byTestId(page, LOCATORS.agreementContinue),
+      10_000,
+      `${flowLabel}协议弹窗`,
+    );
+  }
+  const shouldBrowseAgreement = options.waitAgreement && chooseAgreementPopupBrowse(random);
+  if (shouldBrowseAgreement) {
     mark(`${flowLabel}步骤 ${agreementStep}：协议弹窗浏览等待 1–5 秒`);
-    await waitWhileBrowsing(
+    const agreementBrowseResult = await waitWhileBrowsing(
       page,
       LOCATORS.agreementClose,
       random,
       1_000,
       5_000,
       `${flowLabel}步骤 ${agreementStep}`,
+      {
+        onBrowse: () => scrollAgreementPopupContent(
+          page,
+          random,
+          `${flowLabel}步骤 ${agreementStep}`,
+        ),
+        onOverlayDismiss: () => handleAgreementAfterOverlayDismiss(
+          page,
+          random,
+          `${flowLabel}步骤 ${agreementStep}`,
+        ),
+      },
     );
+    if (!agreementBrowseResult.browseConfirmed) {
+      throw new Error(`${flowLabel}步骤 ${agreementStep}：协议内容未发生有效滚动，禁止进入产品选择`);
+    }
+  } else if (options.waitAgreement) {
+    mark(`${flowLabel}步骤 ${agreementStep}：本次用户跳过协议内容浏览，等待 1–3 秒后继续`);
+    await waitConfigured(random, 1_000, 3_000);
   }
   mark(`${flowLabel}步骤 ${agreementStep}：点击强制阅读协议弹窗同意并继续`);
   await clickTestId(
