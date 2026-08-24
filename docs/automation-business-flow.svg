@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1500" viewBox="0 0 1600 1500" role="img" aria-labelledby="title desc">
+  <title id="title">自动化 API 服务与脚本业务流程</title>
+  <desc id="desc">业务服务端向 4188 自动化 API 提交任务，API 服务调用 Playwright 脚本，脚本生成视频并写入本地，API 服务回调业务服务端；回调失败会重试，服务启动和每日定时任务会清理过期数据。</desc>
+  <defs>
+    <marker id="blue-arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" fill="#2563eb"/></marker>
+    <marker id="green-arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" fill="#16a34a"/></marker>
+    <marker id="orange-arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" fill="#ea580c"/></marker>
+    <marker id="red-arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" fill="#dc2626"/></marker>
+    <style>
+      .font { font-family: PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif; fill: #0f172a; }
+      .title { font-size: 32px; font-weight: 700; }
+      .subtitle { font-size: 16px; fill: #475569; }
+      .participant { font-size: 18px; font-weight: 700; }
+      .participant-sub { font-size: 13px; fill: #64748b; }
+      .step { font-size: 15px; font-weight: 700; fill: #1d4ed8; }
+      .body { font-size: 15px; }
+      .small { font-size: 13px; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; rx: 12; }
+      .api { fill: #eff6ff; stroke: #93c5fd; }
+      .script { fill: #f5f3ff; stroke: #c4b5fd; }
+      .store { fill: #ecfdf5; stroke: #86efac; }
+      .callback { fill: #fff7ed; stroke: #fdba74; }
+      .failure { fill: #fef2f2; stroke: #fca5a5; }
+      .note { fill: #f8fafc; stroke: #94a3b8; stroke-dasharray: 6 5; }
+      .guide { stroke: #e2e8f0; stroke-width: 2; stroke-dasharray: 6 8; }
+      .blue { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#blue-arrow); }
+      .green { stroke: #16a34a; stroke-width: 2.5; fill: none; marker-end: url(#green-arrow); }
+      .orange { stroke: #ea580c; stroke-width: 2.5; fill: none; marker-end: url(#orange-arrow); }
+      .red { stroke: #dc2626; stroke-width: 2.5; fill: none; marker-end: url(#red-arrow); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1500" fill="#f8fafc"/>
+  <text x="70" y="58" class="font title">自动化 API 服务端与脚本交互业务流程</text>
+  <text x="70" y="88" class="font subtitle">主链路从上到下阅读；横向箭头表示服务之间的请求、结果和状态传递</text>
+
+  <!-- Participants -->
+  <rect x="50" y="120" width="250" height="1040" rx="16" fill="#eef2ff"/>
+  <rect x="330" y="120" width="310" height="1040" rx="16" fill="#eff6ff"/>
+  <rect x="670" y="120" width="280" height="1040" rx="16" fill="#f5f3ff"/>
+  <rect x="980" y="120" width="280" height="1040" rx="16" fill="#ecfdf5"/>
+  <rect x="1290" y="120" width="260" height="1040" rx="16" fill="#fff7ed"/>
+  <text x="175" y="158" text-anchor="middle" class="font participant">业务服务端</text>
+  <text x="175" y="181" text-anchor="middle" class="font participant-sub">提交任务 / 查询结果</text>
+  <text x="485" y="158" text-anchor="middle" class="font participant">自动化 API · 4188</text>
+  <text x="485" y="181" text-anchor="middle" class="font participant-sub">鉴权 / 排队 / 回调</text>
+  <text x="810" y="158" text-anchor="middle" class="font participant">Playwright 脚本</text>
+  <text x="810" y="181" text-anchor="middle" class="font participant-sub">浏览器自动化</text>
+  <text x="1120" y="158" text-anchor="middle" class="font participant">本地持久化</text>
+  <text x="1120" y="181" text-anchor="middle" class="font participant-sub">任务状态 / 视频</text>
+  <text x="1420" y="158" text-anchor="middle" class="font participant">业务回调接口</text>
+  <text x="1420" y="181" text-anchor="middle" class="font participant-sub">接收执行结果</text>
+  <line x1="175" y1="205" x2="175" y2="1130" class="guide"/>
+  <line x1="485" y1="205" x2="485" y2="1130" class="guide"/>
+  <line x1="810" y1="205" x2="810" y2="1130" class="guide"/>
+  <line x1="1120" y1="205" x2="1120" y2="1130" class="guide"/>
+  <line x1="1420" y1="205" x2="1420" y2="1130" class="guide"/>
+
+  <!-- Main flow -->
+  <rect x="70" y="225" width="210" height="112" class="box"/>
+  <text x="90" y="252" class="font step">1 · 提交任务</text>
+  <text x="90" y="278" class="font body">POST /api/automation/jobs</text>
+  <text x="90" y="301" class="font small">API Key + links[].name</text>
+  <text x="90" y="322" class="font small">url · dryRun=false</text>
+  <path d="M280 281 L360 281" class="blue"/>
+
+  <rect x="360" y="225" width="250" height="112" class="api"/>
+  <text x="380" y="252" class="font step">2 · 鉴权与校验</text>
+  <text x="380" y="278" class="font body">API Key、回调配置</text>
+  <text x="380" y="301" class="font small">订单号、链接、并发数</text>
+  <text x="380" y="322" class="font small">不通过：400 / 401 / 503</text>
+
+  <rect x="360" y="375" width="250" height="98" class="api"/>
+  <text x="380" y="402" class="font step">3 · 创建异步任务</text>
+  <text x="380" y="428" class="font body">生成 jobId，状态 running</text>
+  <text x="380" y="451" class="font small">写入初始结果，返回 202</text>
+  <path d="M485 337 L485 375" class="blue"/>
+
+  <rect x="70" y="375" width="210" height="98" class="box"/>
+  <text x="90" y="402" class="font step">收到受理结果</text>
+  <text x="90" y="428" class="font body">202 + jobId</text>
+  <text x="90" y="451" class="font small">脚本仍在后台执行</text>
+  <path d="M360 424 C325 424 315 424 280 424" class="blue"/>
+  <text x="317" y="411" text-anchor="middle" class="font small">立即返回</text>
+
+  <rect x="360" y="525" width="250" height="108" class="api"/>
+  <text x="380" y="552" class="font step">4 · 排队与并发控制</text>
+  <text x="380" y="578" class="font body">worker 获取待执行链接</text>
+  <text x="380" y="601" class="font small">默认最多 4 个浏览器任务</text>
+  <text x="380" y="622" class="font small">单任务并发：1–10</text>
+  <path d="M485 473 L485 525" class="blue"/>
+
+  <rect x="700" y="525" width="220" height="108" class="script"/>
+  <text x="720" y="552" class="font step">5 · 执行 Playwright</text>
+  <text x="720" y="578" class="font body">访问业务链接</text>
+  <text x="720" y="601" class="font small">填写信息并操作页面</text>
+  <text x="720" y="622" class="font small">成功或失败均产出结果</text>
+  <path d="M610 579 L700 579" class="blue"/>
+
+  <rect x="1000" y="525" width="240" height="108" class="store"/>
+  <text x="1020" y="552" class="font step">6 · 视频落盘</text>
+  <text x="1020" y="578" class="font body">output/videos/</text>
+  <text x="1020" y="601" class="font small">success/ 或 failed/</text>
+  <text x="1020" y="622" class="font small">result-N.json + videoPath</text>
+  <path d="M920 579 L1000 579" class="green"/>
+
+  <rect x="360" y="690" width="250" height="112" class="api"/>
+  <text x="380" y="717" class="font step">7 · 更新任务状态</text>
+  <text x="380" y="743" class="font body">success / failed</text>
+  <text x="380" y="766" class="font small">videoUrl、error、completedAt</text>
+  <text x="380" y="787" class="font small">callbackStatus=pending</text>
+  <path d="M1000 650 C850 650 760 746 610 746" class="green"/>
+
+  <rect x="70" y="690" width="210" height="112" class="box"/>
+  <text x="90" y="717" class="font step">8 · 查询任务</text>
+  <text x="90" y="743" class="font body">GET /jobs/:jobId</text>
+  <text x="90" y="766" class="font small">查看执行结果</text>
+  <text x="90" y="787" class="font small">videoUrl / callbackStatus</text>
+  <path d="M360 746 L280 746" class="blue"/>
+
+  <rect x="1000" y="690" width="240" height="112" class="store"/>
+  <text x="1020" y="717" class="font step">任务状态持久化</text>
+  <text x="1020" y="743" class="font body">automation-jobs/&lt;jobId&gt;</text>
+  <text x="1020" y="766" class="font small">job.json 保存完整结果</text>
+  <text x="1020" y="787" class="font small">服务重启后可继续查询</text>
+  <path d="M610 746 L1000 746" class="green"/>
+
+  <!-- Callback flow -->
+  <rect x="360" y="855" width="250" height="126" class="api"/>
+  <text x="380" y="882" class="font step">9 · 发起结果回调</text>
+  <text x="380" y="908" class="font body">POST /api/nw/record/callback</text>
+  <text x="380" y="931" class="font small">Bearer callbackKey</text>
+  <text x="380" y="952" class="font small">success：videoUrl + fileSize</text>
+  <text x="380" y="973" class="font small">failed：error；不传 planNo</text>
+  <path d="M610 918 L1320 918" class="orange"/>
+
+  <rect x="1320" y="855" width="200" height="126" class="callback"/>
+  <text x="1340" y="882" class="font step">业务服务端接收</text>
+  <text x="1340" y="908" class="font body">HTTP 200</text>
+  <text x="1340" y="931" class="font small">记录订单处理结果</text>
+  <text x="1340" y="952" class="font small">准备下载视频</text>
+  <text x="1340" y="973" class="font small">/videos/...</text>
+
+  <rect x="1290" y="1035" width="230" height="100" class="store"/>
+  <text x="1310" y="1062" class="font step">回调成功</text>
+  <text x="1310" y="1088" class="font body">callbackStatus=success</text>
+  <text x="1310" y="1111" class="font small">视频进入正常保留周期</text>
+  <path d="M1420 981 L1420 1035" class="green"/>
+  <text x="1440" y="1015" class="font small">200</text>
+
+  <rect x="1000" y="1035" width="240" height="100" class="failure"/>
+  <text x="1020" y="1062" class="font step" fill="#b91c1c">回调失败</text>
+  <text x="1020" y="1088" class="font body">超时 / 非 200</text>
+  <text x="1020" y="1111" class="font small">5s、10s、30s 后重试</text>
+  <path d="M1320 981 L1240 1085" class="red"/>
+  <path d="M1000 1085 L650 1085 L650 1005 L610 950" class="red"/>
+  <text x="790" y="1065" text-anchor="middle" class="font small" fill="#b91c1c">最多 4 次，失败后回到第 9 步</text>
+
+  <!-- Side paths and cleanup -->
+  <rect x="70" y="1035" width="540" height="100" class="note"/>
+  <text x="90" y="1062" class="font step">旁路：前端 / CLI</text>
+  <text x="90" y="1088" class="font small">可以执行脚本并生成视频，但不经过正式 API，不发送业务回调。</text>
+  <text x="90" y="1111" class="font small">前端视频目录：output/quick-test-videos/</text>
+
+  <rect x="360" y="1190" width="880" height="150" class="note"/>
+  <text x="390" y="1220" class="font step">10 · 自动清理（服务启动 + 默认每 24 小时）</text>
+  <text x="390" y="1250" class="font body">保护：active、callbackStatus=pending/sending、正在执行的任务</text>
+  <text x="390" y="1277" class="font small">成功视频 7 天 · 失败视频 1 天 · 回调失败视频 30 天 · API 任务记录 30 天</text>
+  <text x="390" y="1303" class="font small">前端测试数据 3 天 · 日志超过 50MB 轮转，轮转日志保留 14 天</text>
+  <path d="M1120 802 L1120 1190" class="green"/>
+
+  <rect x="70" y="1380" width="1450" height="70" rx="12" fill="#0f172a"/>
+  <text x="95" y="1410" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15px" font-weight="700" fill="#ffffff">关键规则：</text>
+  <text x="190" y="1410" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="13px" fill="#e2e8f0">录制结果与回调结果是两套状态。录制成功但回调失败时，视频不会立即删除，回调会按策略重试。</text>
+  <text x="95" y="1434" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="13px" fill="#cbd5e1">业务服务端可先收到 202，再通过 jobId 查询；回调中的 videoUrl 是相对于 4188 服务的 /videos/... 地址。</text>
+</svg>
