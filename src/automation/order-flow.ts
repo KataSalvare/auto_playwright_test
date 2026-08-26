@@ -132,6 +132,14 @@ export function chooseAgreementBrowseAfterTabSwitch(random: () => number): boole
   return random() < agreementBrowseAfterTabSwitchChance;
 }
 
+export function calculateRecordingTrimDurationMs(
+  recordingStartedAt?: number,
+  recordingCutoffAt?: number,
+): number | undefined {
+  if (recordingStartedAt === undefined || recordingCutoffAt === undefined) return undefined;
+  return Math.max(recordingCutoffAt - recordingStartedAt, 0);
+}
+
 /**
  * 选择包含初始 TAB 在内的总浏览数：2 / 3 / 4 = 62.5% / 25% / 12.5%。
  * 结合关闭蒙层后的三类行为，整体约为 1 / 2 / 3 / 4 个 TAB = 60% / 25% / 10% / 5%。
@@ -1543,7 +1551,7 @@ export async function runOrderFlow(
     let browser: Browser | undefined;
     let context: BrowserContext | undefined;
     let nativeVideo: ReturnType<Page['video']> | undefined;
-    const recordingStartedAt = Date.now();
+    let recordingStartedAt: number | undefined;
     let recordedPath: string | undefined;
     let recordingCutoffAt: number | undefined;
     const markRecordingCutoff = () => {
@@ -1572,6 +1580,8 @@ export async function runOrderFlow(
       });
       const page = await context.newPage();
       nativeVideo = page.video();
+      // 录制计时从页面和原生 Video 都已创建后开始，避免把浏览器启动耗时算进裁切时长。
+      recordingStartedAt = Date.now();
       mark(`打开页面：流程 ${order.pageOrder}`);
       await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
       if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, markRecordingCutoff);
@@ -1607,7 +1617,7 @@ export async function runOrderFlow(
       orderId: order.orderId,
       outputDir,
       deleteFailedVideo: options.deleteFailedVideo,
-      trimDurationMs: recordingCutoffAt ? recordingCutoffAt - recordingStartedAt : undefined,
+      trimDurationMs: calculateRecordingTrimDurationMs(recordingStartedAt, recordingCutoffAt),
     });
 
     if (!success) {

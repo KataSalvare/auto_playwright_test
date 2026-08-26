@@ -7,8 +7,25 @@ import {
   chooseAgreementAfterOverlayBehavior,
   chooseAgreementBrowseAfterTabSwitch,
   chooseAgreementTabBrowseTotal,
+  calculateRecordingTrimDurationMs,
   runInterruptibleAgreementBrowse,
 } from '../../src/automation/order-flow';
+
+test.describe('视频录制时钟', () => {
+  test('裁切时长从页面录制开始计算，不包含浏览器启动耗时', () => {
+    const browserStartedAt = 0;
+    const recordingStartedAt = 8_000;
+    const recordingCutoffAt = 23_000;
+
+    expect(calculateRecordingTrimDurationMs(recordingStartedAt, recordingCutoffAt)).toBe(15_000);
+    expect(calculateRecordingTrimDurationMs(browserStartedAt, recordingCutoffAt)).toBe(23_000);
+  });
+
+  test('缺少录制起点或裁切点时不生成裁切时长', () => {
+    expect(calculateRecordingTrimDurationMs(undefined, 1_000)).toBeUndefined();
+    expect(calculateRecordingTrimDurationMs(1_000, undefined)).toBeUndefined();
+  });
+});
 
 test.describe('首单步骤 5 后的协议/社保/续保分支', () => {
   test('方案 1：社保和续保均为 1 时，大多数用户直接跳过 6–8', () => {
