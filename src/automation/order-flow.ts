@@ -8,7 +8,7 @@ import { byTestId, getSuccessToast, LOCATORS } from './locators';
 import { createMobileBrowseBehavior, isLocatorInViewport } from './mobile-browse';
 import type { LocatorTestId } from './locators';
 import { createSeededRandom, pick, randomBetween, randomInteger } from './random';
-import { finalizeVideo } from './video-manager';
+import { finalizeVideo, startVideoRecording } from './video-manager';
 import type { AutomationOptions, HumanBrowseBehavior, OrderInput, RunResult } from './types';
 import { formatDuration, logger } from './logger';
 
@@ -1245,7 +1245,7 @@ async function runAgreementAndProductFlow(
   flowLabel: string,
   agreementStep: number,
   productStep: number,
-  markRecordingCutoff: () => void,
+  markRecordingCutoff: () => Promise<void>,
 ) {
   // 主按钮已经触发协议弹窗，模拟用户阅读/浏览后再继续。
   if (options.waitAgreement) {
@@ -1309,11 +1309,11 @@ async function runAgreementAndProductFlow(
   mark(`${flowLabel}步骤 ${productStep}：选择${options.product === 'basic' ? '基础版' : '升级版'}产品`);
   await selectProduct(page, options.product);
 
-  // 原生 Video 不能在页面继续运行时单独停止，因此记录裁剪点，页面继续监控 success。
-  mark(`${flowLabel}步骤 ${productStep}：等待 2–3 秒并记录裁剪点`);
+  // screencast 在此停止录制，视频到此为止；页面继续等待 success Toast 但不再录制。
+  mark(`${flowLabel}步骤 ${productStep}：等待 2–3 秒并停止录制`);
   await waitConfigured(random, 2_000, 3_000);
   mark(`${flowLabel}步骤 ${productStep}：记录视频裁剪点`);
-  markRecordingCutoff();
+  await markRecordingCutoff();
 }
 
 async function runFirstOrder(
@@ -1321,7 +1321,7 @@ async function runFirstOrder(
   order: OrderInput,
   options: AutomationOptions,
   random: () => number,
-  markRecordingCutoff: () => void,
+  markRecordingCutoff: () => Promise<void>,
 ) {
   /*
    * 首单步骤：
@@ -1477,7 +1477,7 @@ async function runRepeatOrder(
   page: Page,
   options: AutomationOptions,
   random: () => number,
-  markRecordingCutoff: () => void,
+  markRecordingCutoff: () => Promise<void>,
 ) {
   /* 非首单步骤：1 等待页面；2 勾选协议；3 完善信息；4 协议弹窗；5 产品；6 成功 Toast。 */
   // 步骤 1 前：页面打开后先随机等待，暂不执行滚动等浏览操作。
@@ -1541,7 +1541,7 @@ export async function runOrderFlow(
     // macOS 的 Chrome/Chromium 需要访问沙箱禁止的系统服务；在浏览器启动前给出明确提示。
     assertBrowserLaunchAllowed();
 
-    // 每个订单使用独立浏览器上下文；原生录像在 context 关闭时完成写入。
+    // 每个订单使用独立浏览器上下文，screencast 停止时完成原始录像写入。
     const outputDir = options.outputDir || defaultOutputDir;
     const pendingDir = resolve(outputDir, '.pending');
     await mkdir(pendingDir, { recursive: true });
@@ -1550,12 +1550,20 @@ export async function runOrderFlow(
 
     let browser: Browser | undefined;
     let context: BrowserContext | undefined;
-    let nativeVideo: ReturnType<Page['video']> | undefined;
+    let page: Page | undefined;
+    let screencastPath: string | undefined;
     let recordingStartedAt: number | undefined;
     let recordedPath: string | undefined;
     let recordingCutoffAt: number | undefined;
-    const markRecordingCutoff = () => {
-      if (!recordingCutoffAt) recordingCutoffAt = Date.now();
+    let screencastStopped = false;
+    // 在产品选择后的截止点停止录制，随后只等待订单结果。
+    const markRecordingCutoff = async () => {
+      if (recordingCutoffAt) return;
+      recordingCutoffAt = Date.now();
+      if (page && !screencastStopped) {
+        screencastStopped = true;
+        await page.screencast.stop().catch(() => undefined);
+      }
     };
     const random = createSeededRandom(options.seed + 101);
     let success = false;
@@ -1570,18 +1578,15 @@ export async function runOrderFlow(
         ...devices['iPhone 15'],
         viewport: iPhone15Screen,
         screen: iPhone15Screen,
-        recordVideo: {
-          dir: pendingDir,
-          size: iPhone15Screen,
-        },
         locale: 'zh-CN',
         timezoneId: 'Asia/Shanghai',
         colorScheme: 'light',
       });
-      const page = await context.newPage();
-      nativeVideo = page.video();
-      // 录制计时从页面和原生 Video 都已创建后开始，避免把浏览器启动耗时算进裁切时长。
-      recordingStartedAt = Date.now();
+      page = await context.newPage();
+      // 先确认录制首帧到达，再导航，避免页面开场动画抢在采集就绪之前播放。
+      screencastPath = resolve(pendingDir, `${order.orderId}-${Date.now()}${process.pid}.webm`);
+      recordingStartedAt = await startVideoRecording(page, { path: screencastPath, size: iPhone15Screen });
+      // 使用首帧时间计算截止点，保留导航前画面，不因就绪等待误剪视频结尾。
       mark(`打开页面：流程 ${order.pageOrder}`);
       await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
       if (order.pageOrder === 1) await runFirstOrder(page, order, options, random, markRecordingCutoff);
@@ -1597,10 +1602,13 @@ export async function runOrderFlow(
     } catch (error) {
       failure = error;
     } finally {
+      // 确保异常时也停止 screencast，避免视频文件不完整。
+      if (page && !screencastStopped) {
+        screencastStopped = true;
+        await page.screencast.stop().catch(() => undefined);
+      }
       try {
-        // 原生 Video 只有在 context 关闭后才保证已写入磁盘。
         if (context) await context.close();
-        if (nativeVideo) recordedPath = await nativeVideo.path();
       } catch (error) {
         if (!failure) failure = error;
       }
@@ -1609,6 +1617,8 @@ export async function runOrderFlow(
       } catch (error) {
         if (!failure) failure = error;
       }
+      // screencast.stop() 后文件已写入磁盘，无需等待 context.close()。
+      recordedPath = screencastPath;
     }
 
     const videoPath = await finalizeVideo({

@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
-import { mkdir, rm, rename } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
+import type { Page } from '@playwright/test';
 
 const execFileAsync = promisify(execFile);
-const videoDurationToleranceMs = 500;
 let videoSequence = 0;
 
 function uniqueVideoSuffix(): string {
@@ -15,68 +15,32 @@ function safeFilename(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-async function probeVideoDurationMs(inputPath: string): Promise<number> {
-  const { stdout } = await execFileAsync('ffprobe', [
-    '-v',
-    'error',
-    '-show_entries',
-    'format=duration',
-    '-of',
-    'default=noprint_wrappers=1:nokey=1',
-    inputPath,
-  ]);
-  const durationMs = Number.parseFloat(stdout.trim()) * 1_000;
-  if (!Number.isFinite(durationMs) || durationMs < 0) {
-    throw new Error(`无法读取视频时长：${inputPath}`);
-  }
-  return durationMs;
-}
+/** 首帧到达后才允许导航，返回录像时间零点（毫秒），包含导航前的画面。 */
+export async function startVideoRecording(
+  page: { screencast: Pick<Page['screencast'], 'start'> },
+  options: { path: string; size: { width: number; height: number } },
+  timeoutMs = 10_000,
+): Promise<number> {
+  let receiveFirstFrame!: (timestamp: number) => void;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const firstFrame = new Promise<number>((resolveFrame, rejectFrame) => {
+    receiveFirstFrame = resolveFrame;
+    timer = setTimeout(() => rejectFrame(new Error('录制启动超时：未收到首帧，未打开业务页面')), timeoutMs);
+  });
 
-async function moveToFailedVideo({
-  recordedPath,
-  outputDir,
-  orderId,
-}: {
-  recordedPath: string;
-  outputDir: string;
-  orderId: string;
-}): Promise<string> {
-  const failedDir = `${outputDir}/failed`;
-  await mkdir(failedDir, { recursive: true });
-  const failedPath = `${failedDir}/${safeFilename(orderId)}-recording-anomaly-${uniqueVideoSuffix()}.mp4`;
-  await rename(recordedPath, failedPath);
-  return failedPath;
-}
-
-async function validateTrimDuration({
-  recordedPath,
-  outputDir,
-  orderId,
-  trimDurationMs,
-}: {
-  recordedPath: string;
-  outputDir: string;
-  orderId: string;
-  trimDurationMs: number;
-}) {
-  let actualDurationMs: number;
   try {
-    actualDurationMs = await probeVideoDurationMs(recordedPath);
-  } catch (error) {
-    const anomalyPath = await moveToFailedVideo({ recordedPath, outputDir, orderId });
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`视频录制异常：无法读取原始视频时长（${message}）；失败视频：${anomalyPath}`, {
-      cause: error,
-    });
+    // start() 返回并不代表已有画面；帧回调和原始录像使用同一帧时间戳。
+    const [, timestamp] = await Promise.all([
+      page.screencast.start({
+        ...options,
+        onFrame: ({ timestamp }) => receiveFirstFrame(timestamp),
+      }),
+      firstFrame,
+    ]);
+    return timestamp;
+  } finally {
+    clearTimeout(timer);
   }
-
-  if (actualDurationMs + videoDurationToleranceMs >= trimDurationMs) return;
-
-  const anomalyPath = await moveToFailedVideo({ recordedPath, outputDir, orderId });
-  const shortfallMs = Math.round(trimDurationMs - actualDurationMs);
-  throw new Error(
-    `视频录制异常：原始视频时长 ${Math.round(actualDurationMs)}ms，目标时长 ${Math.round(trimDurationMs)}ms，短缺 ${shortfallMs}ms；失败视频：${anomalyPath}`,
-  );
 }
 
 async function transcodeVideo({
@@ -127,7 +91,7 @@ export async function finalizeVideo({
   orderId: string;
   outputDir: string;
   deleteFailedVideo: boolean;
-  /** 产品选择后 2–3 秒对应的原生视频时长，成功视频按此时间裁剪。 */
+  /** 产品选择后 2–3 秒对应的视频时长，成功视频按此时间裁剪。 */
   trimDurationMs?: number;
 }): Promise<string | undefined> {
   if (!recordedPath) return undefined;
@@ -145,15 +109,6 @@ export async function finalizeVideo({
     await transcodeVideo({ inputPath: recordedPath, outputPath: failedPath });
     await rm(recordedPath, { force: true });
     return failedPath;
-  }
-
-  if (trimDurationMs !== undefined) {
-    await validateTrimDuration({
-      recordedPath,
-      outputDir,
-      orderId,
-      trimDurationMs,
-    });
   }
 
   const successDir = `${outputDir}/success`;

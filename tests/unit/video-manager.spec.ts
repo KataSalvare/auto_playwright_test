@@ -1,14 +1,55 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { expect, test } from '@playwright/test';
-import { finalizeVideo } from '../../src/automation/video-manager';
+import { expect, test, type Page } from '@playwright/test';
+import { finalizeVideo, startVideoRecording } from '../../src/automation/video-manager';
 
 const execFileAsync = promisify(execFile);
 
-async function temporaryVideo(durationSeconds = 0.5) {
+test.describe('导航前的录像就绪屏障', () => {
+  const options = { path: 'recording.webm', size: { width: 392, height: 852 } };
+  const disposable = { dispose: async () => {}, [Symbol.asyncDispose]: async () => {} };
+
+  test('start 返回后仍等待首帧，并使用首帧时间保留导航前画面', async () => {
+    type StartOptions = NonNullable<Parameters<Page['screencast']['start']>[0]>;
+    let onFrame!: NonNullable<StartOptions['onFrame']>;
+    const page = { screencast: { start: async (args: StartOptions = {}) => {
+      onFrame = args.onFrame!;
+      return disposable;
+    } } };
+    let navigated = false;
+    const started = startVideoRecording(page, options).then(timestamp => {
+      navigated = true;
+      return timestamp;
+    });
+
+    await new Promise<void>(resolveTurn => setImmediate(resolveTurn));
+    expect(navigated).toBe(false);
+    const firstTimestamp = Date.now() - 250;
+    onFrame({ data: Buffer.alloc(0), timestamp: firstTimestamp, viewportWidth: 392, viewportHeight: 852 });
+    onFrame({ data: Buffer.alloc(0), timestamp: firstTimestamp + 40, viewportWidth: 392, viewportHeight: 852 });
+    await expect(started).resolves.toBe(firstTimestamp);
+    expect(navigated).toBe(true);
+  });
+
+  test('没有首帧时超时失败，不进入导航', async () => {
+    const page = { screencast: { start: async () => disposable } };
+    let navigated = false;
+    const started = startVideoRecording(page, options, 20).then(() => { navigated = true; });
+    await expect(started).rejects.toThrow('未收到首帧，未打开业务页面');
+    expect(navigated).toBe(false);
+  });
+
+  test('录制启动失败时直接上抛原始错误', async () => {
+    const error = new Error('screencast unavailable');
+    const page = { screencast: { start: async () => { throw error; } } };
+    await expect(startVideoRecording(page, options)).rejects.toBe(error);
+  });
+});
+
+async function temporaryVideo() {
   const directory = await mkdtemp(join(tmpdir(), 'order-video-'));
   const path = join(directory, 'recording.mp4');
   await execFileAsync('ffmpeg', [
@@ -18,7 +59,7 @@ async function temporaryVideo(durationSeconds = 0.5) {
     '-f',
     'lavfi',
     '-i',
-    `color=c=black:s=2x2:r=30:d=${durationSeconds}`,
+    'color=c=black:s=2x2:r=30:d=0.5',
     '-an',
     '-c:v',
     'libx264',
@@ -75,48 +116,15 @@ test.describe('失败视频配置', () => {
         orderId: 'order/1',
         outputDir: join(temporary.directory, 'output'),
         deleteFailedVideo: false,
-        trimDurationMs: 300,
+        // 原始视频短于目标时长时仍应直接转码保存，不再触发时长校验。
+        trimDurationMs: 2_000,
       });
 
       expect(result).toMatch(/\/success\/order_1-success-\d+\.mp4$/);
       await expect(readFile(result!)).resolves.toBeTruthy();
-      const probe = await execFileAsync('ffprobe', [
-        '-v',
-        'error',
-        '-show_entries',
-        'format=duration',
-        '-of',
-        'default=noprint_wrappers=1:nokey=1',
-        result!,
-      ]);
-      const durationMs = Number.parseFloat(probe.stdout.trim()) * 1_000;
-      expect(durationMs).toBeGreaterThanOrEqual(200);
-      expect(durationMs).toBeLessThanOrEqual(500);
       await expect(readFile(temporary.path)).rejects.toThrow();
     } finally {
       await rm(temporary.directory, { recursive: true, force: true });
     }
   });
-});
-
-test('原始视频明显短于目标裁切时长时报告录制异常', async () => {
-  const temporary = await temporaryVideo(1);
-  try {
-    await expect(finalizeVideo({
-      recordedPath: temporary.path,
-      success: true,
-      orderId: 'short-order',
-      outputDir: join(temporary.directory, 'output'),
-      deleteFailedVideo: false,
-      trimDurationMs: 3_000,
-    })).rejects.toThrow(/视频录制异常：原始视频时长 .*目标时长 .*短缺 .*失败视频：/);
-
-    await expect(readFile(temporary.path)).rejects.toThrow();
-    const failedFiles = await readdir(join(temporary.directory, 'output', 'failed'));
-    expect(failedFiles).toHaveLength(1);
-    expect(failedFiles[0]).toMatch(/short-order-recording-anomaly-\d+\.mp4$/);
-    await expect(readdir(join(temporary.directory, 'output', 'success'))).rejects.toThrow();
-  } finally {
-    await rm(temporary.directory, { recursive: true, force: true });
-  }
 });
