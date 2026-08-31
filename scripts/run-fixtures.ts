@@ -26,6 +26,7 @@ async function main() {
     const order = parseOrderUrl(url);
     logger.info(`开始夹具：${name}，流程 ${order.pageOrder}`);
     await runOrderFlow(order, options);
+    logger.info(`夹具执行成功：${name}`);
   }
 
   logger.info(`全部测试夹具执行完成，命令耗时 ${formatDuration(startedAt)}`);

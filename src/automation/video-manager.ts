@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import type { Page } from '@playwright/test';
+import { logger } from './logger';
 
 const execFileAsync = promisify(execFile);
 let videoSequence = 0;
@@ -108,6 +109,7 @@ export async function finalizeVideo({
     const failedPath = `${failedDir}/${safeFilename(orderId)}-failed-${uniqueVideoSuffix()}.mp4`;
     await transcodeVideo({ inputPath: recordedPath, outputPath: failedPath });
     await rm(recordedPath, { force: true });
+    logger.info(`失败视频已保存：${failedPath}`);
     return failedPath;
   }
 
@@ -120,5 +122,6 @@ export async function finalizeVideo({
     trimDurationMs,
   });
   await rm(recordedPath, { force: true });
+  logger.info(`成功视频已保存：${successPath}`);
   return successPath;
 }

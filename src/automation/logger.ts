@@ -1,7 +1,9 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const defaultLogFile = resolve('output/automation.log');
+const logContext = new AsyncLocalStorage<string>();
 
 function logFilePath() {
   return resolve(process.env.AUTOMATION_LOG_FILE || defaultLogFile);
@@ -13,7 +15,9 @@ function formatError(error: unknown) {
 }
 
 function write(level: 'INFO' | 'ERROR', message: string) {
-  const line = `[${new Date().toISOString()}] [${level}] ${message}`;
+  const context = logContext.getStore();
+  const contextualMessage = context ? `[${context}] ${message}` : message;
+  const line = `[${new Date().toISOString()}] [${level}] ${contextualMessage}`;
   const file = logFilePath();
 
   try {
@@ -29,6 +33,10 @@ function write(level: 'INFO' | 'ERROR', message: string) {
 }
 
 export const logger = {
+  withContext<T>(context: string, callback: () => Promise<T>): Promise<T> {
+    return logContext.run(context, callback);
+  },
+
   info(message: string) {
     write('INFO', message);
   },
@@ -41,4 +49,3 @@ export const logger = {
 export function formatDuration(startedAt: number) {
   return `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
 }
-

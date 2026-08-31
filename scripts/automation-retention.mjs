@@ -15,7 +15,7 @@ export const DEFAULT_RETENTION_POLICY = Object.freeze({
 });
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm']);
-const LOG_NAMES = Object.freeze(['quick-test-server.log', 'automation-api.log']);
+const LOG_NAMES = Object.freeze(['automation.log', 'quick-test-server.log', 'automation-api.log']);
 
 function isMissing(error) { return error?.code === 'ENOENT'; }
 function logMessage(logger, level, message) { logger?.(level, message); }

@@ -10,7 +10,7 @@ import type { LocatorTestId } from './locators';
 import { createSeededRandom, pick, randomBetween, randomInteger } from './random';
 import { finalizeVideo, startVideoRecording } from './video-manager';
 import type { AutomationOptions, HumanBrowseBehavior, OrderInput, RunResult } from './types';
-import { formatDuration, logger } from './logger';
+import { logger } from './logger';
 
 const defaultOutputDir = resolve('output/videos');
 // 自动化统一模拟 iPhone 15 的完整屏幕尺寸，不随运行环境窗口变化。
@@ -1533,9 +1533,15 @@ export async function runOrderFlow(
   order: OrderInput,
   options: AutomationOptions,
 ): Promise<RunResult> {
-  const startedAt = Date.now();
   const runLabel = `订单 ${order.orderId} / 流程 ${order.pageOrder}`;
-  logger.info(`${runLabel} 开始执行`);
+  return logger.withContext(runLabel, () => runOrderFlowInContext(order, options));
+}
+
+async function runOrderFlowInContext(
+  order: OrderInput,
+  options: AutomationOptions,
+): Promise<RunResult> {
+  logger.info('开始执行');
 
   try {
     // macOS 的 Chrome/Chromium 需要访问沙箱禁止的系统服务；在浏览器启动前给出明确提示。
@@ -1562,7 +1568,10 @@ export async function runOrderFlow(
       recordingCutoffAt = Date.now();
       if (page && !screencastStopped) {
         screencastStopped = true;
-        await page.screencast.stop().catch(() => undefined);
+        await page.screencast.stop().then(
+          () => mark('录制已停止：原始视频已写入'),
+          (error) => logger.error('录制停止失败，继续处理视频', error),
+        );
       }
     };
     const random = createSeededRandom(options.seed + 101);
@@ -1585,7 +1594,9 @@ export async function runOrderFlow(
       page = await context.newPage();
       // 先确认录制首帧到达，再导航，避免页面开场动画抢在采集就绪之前播放。
       screencastPath = resolve(pendingDir, `${order.orderId}-${Date.now()}${process.pid}.webm`);
+      mark('录制启动：等待首帧');
       recordingStartedAt = await startVideoRecording(page, { path: screencastPath, size: iPhone15Screen });
+      mark('录制已就绪：已收到首帧');
       // 使用首帧时间计算截止点，保留导航前画面，不因就绪等待误剪视频结尾。
       mark(`打开页面：流程 ${order.pageOrder}`);
       await page.goto(order.sourceUrl, { waitUntil: 'domcontentloaded' });
@@ -1605,7 +1616,10 @@ export async function runOrderFlow(
       // 确保异常时也停止 screencast，避免视频文件不完整。
       if (page && !screencastStopped) {
         screencastStopped = true;
-        await page.screencast.stop().catch(() => undefined);
+        await page.screencast.stop().then(
+          () => mark('录制已停止：原始视频已写入'),
+          (error) => logger.error('录制停止失败，继续处理视频', error),
+        );
       }
       try {
         if (context) await context.close();
@@ -1617,8 +1631,8 @@ export async function runOrderFlow(
       } catch (error) {
         if (!failure) failure = error;
       }
-      // screencast.stop() 后文件已写入磁盘，无需等待 context.close()。
-      recordedPath = screencastPath;
+      // 只有首帧就绪后才允许把路径交给视频处理；启动超时时保留原始失败原因。
+      recordedPath = recordingStartedAt === undefined ? undefined : screencastPath;
     }
 
     const videoPath = await finalizeVideo({
@@ -1642,10 +1656,8 @@ export async function runOrderFlow(
       success,
       videoPath,
     };
-    logger.info(`${runLabel} 执行成功，耗时 ${formatDuration(startedAt)}${videoPath ? `，视频：${videoPath}` : ''}`);
     return result;
   } catch (error) {
-    logger.error(`${runLabel} 执行失败，耗时 ${formatDuration(startedAt)}`, error);
     throw error;
   }
 }

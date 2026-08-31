@@ -128,3 +128,22 @@ test('前端快速测试视频和任务记录按独立保留期清理', async ()
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('automation.log 超过大小限制时会轮转', async () => {
+  const { directory, outputDir } = await createOutputFixture();
+  const now = Date.now();
+  const logPath = join(outputDir, 'automation.log');
+  const archivePath = `${logPath}.${new Date(now).toISOString().replaceAll(':', '-')}`;
+  try {
+    await writeFile(logPath, 'log-content');
+
+    const summary = await cleanupAutomationData({ outputDir, now, maxLogBytes: 1 });
+
+    await expect(stat(logPath)).resolves.toBeTruthy();
+    expect((await stat(logPath)).size).toBe(0);
+    await expect(stat(archivePath)).resolves.toBeTruthy();
+    expect(summary.deleted.rotatedLogs).toBe(1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
